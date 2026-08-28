@@ -12,7 +12,9 @@ to standard MLIR dialects.
 
 A KAN layer can be written as
 
-\[ `\phi`{=tex}*{o,i}(x) = `\sum`{=tex}*k c*{o,i,k} B*{i,k}(x), \]
+$$
+\phi_{o,i}(x) = \sum_k c_{o,i,k} B_{i,k}(x),
+$$
 
 with layer output
 
