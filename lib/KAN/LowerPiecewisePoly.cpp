@@ -151,8 +151,8 @@ public:
     Value zero =
         rewriter.create<arith::ConstantFloatOp>(
             loc,
-            APFloat(0.0f),
-            rewriter.getF32Type());
+            rewriter.getF32Type(),
+            APFloat(0.0f));
 
     //
     // We do not need to initialize the tensor because every [b,o]
@@ -184,8 +184,7 @@ public:
     Value batchTensor =
         batchLoop.getRegionIterArgs()[0];
 
-    rewriter.setInsertionPoint(
-        batchBody->getTerminator());
+    rewriter.setInsertionPointToEnd(batchBody);
 
     //
     // for o = 0 .. dout
@@ -207,8 +206,7 @@ public:
     Value outputTensor =
         outputLoop.getRegionIterArgs()[0];
 
-    rewriter.setInsertionPoint(
-        outputBody->getTerminator());
+    rewriter.setInsertionPointToEnd(outputBody);
 
     //
     // acc = 0
@@ -232,8 +230,7 @@ public:
     Value acc =
         inputLoop.getRegionIterArgs()[0];
 
-    rewriter.setInsertionPoint(
-        inputBody->getTerminator());
+    rewriter.setInsertionPointToEnd(inputBody);
 
     //
     // x = input[b,i]
@@ -343,21 +340,12 @@ public:
             polynomial);
 
     //
-    // Replace the automatically created scf.yield for the
-    // input loop.
+    // Explicitly terminate the input loop with the updated
+    // accumulator.
     //
-    auto inputYield =
-        cast<scf::YieldOp>(
-            inputBody->getTerminator());
-
-    //inputYield.getResults();
-
-    rewriter.modifyOpInPlace(
-        inputYield,
-        [&]() {
-          inputYield.getOperation()
-              ->setOperands(ValueRange{newAcc});
-        });
+    rewriter.create<scf::YieldOp>(
+        loc,
+        ValueRange{newAcc});
 
     //
     // After the i loop, insert the accumulated result into
@@ -376,39 +364,28 @@ public:
             ValueRange{b, o});
 
     //
-    // o-loop yield.
+    // Explicitly terminate the output loop.
     //
-    auto outputYield =
-        cast<scf::YieldOp>(
-            outputBody->getTerminator());
+    rewriter.setInsertionPointToEnd(outputBody);
 
-    rewriter.modifyOpInPlace(
-        outputYield,
-        [&]() {
-          outputYield.getOperation()
-              ->setOperands(
-                  ValueRange{updatedTensor});
-        });
+    rewriter.create<scf::YieldOp>(
+        loc,
+        ValueRange{updatedTensor});
 
     //
-    // b-loop yield.
+    // After the o loop, propagate the completed tensor through
+    // the batch loop.
     //
     rewriter.setInsertionPointAfter(outputLoop);
 
     Value completedOutputRow =
         outputLoop.getResult(0);
 
-    auto batchYield =
-        cast<scf::YieldOp>(
-            batchBody->getTerminator());
+    rewriter.setInsertionPointToEnd(batchBody);
 
-    rewriter.modifyOpInPlace(
-        batchYield,
-        [&]() {
-          batchYield.getOperation()
-              ->setOperands(
-                  ValueRange{completedOutputRow});
-        });
+    rewriter.create<scf::YieldOp>(
+        loc,
+        ValueRange{completedOutputRow});
 
     //
     // Replace the KAN operation with the final tensor.

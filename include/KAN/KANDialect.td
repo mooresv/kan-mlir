@@ -18,8 +18,6 @@ def KAN_Dialect : Dialect {
     converted to piecewise polynomial form.
   }];
 
-  let useDefaultTypePrinterParser = 1;
-  let useDefaultAttributePrinterParser = 1;
 }
 
 #endif // KAN_DIALECT
