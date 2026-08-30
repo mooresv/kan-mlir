@@ -22,7 +22,7 @@ $$
 y_o = \sum_i \phi_{o,i}(x_i).
 $$
 
-For a degree-$d$ B-spline, each learned edge function is a degree-$d$
+For a degree-d B-spline, each learned edge function is a degree-d
 polynomial within each knot interval. This permits an exact change of function
 representation from B-spline basis evaluation to direct piecewise-polynomial
 evaluation.
@@ -606,11 +606,8 @@ trained KAN / learned computation
    GPU / accelerator code
 ```
 
-The central research question is not simply whether a particular polynomial
-KAN implementation can be made fast. Rather, it is whether a compiler can
+The main research question is whether a compiler can
 treat learned scalar functions as transformable IR objects and select
 function representations and implementations according to numerical,
-interpretability, and hardware constraints.
-
-This distinguishes the project from work that proposes a single alternative
+reliability, and hardware constraints. This distinguishes the project from work that proposes a single alternative
 KAN basis or a single hand-optimized GPU implementation.
