@@ -118,7 +118,9 @@ kan-mlir/
 │       ├── CMakeLists.txt
 │       └── kan-opt.cpp
 └── test/
-    └── piecewise_poly.mlir
+    ├── piecewise_poly.mlir
+    ├── make_concrete_test.py
+    └── concrete_piecewise_poly.mlir
 ```
 
 ## Initial KAN Dialect Operation
@@ -346,39 +348,23 @@ ninja kan-opt
 
 ### Current Build Status
 
-CMake configuration succeeds, but the most recent build stopped with:
+`kan-opt` now builds successfully against the torch-mlir unified MLIR build.
+The KAN dialect parses and prints correctly, and the
+`--lower-kan-piecewise-poly` pass is registered and runs successfully.
 
-```text
-ninja: error:
-'/src/torch-mlir/build-unified/lib/libMLIRMlirOptMain.a',
-needed by 'tools/kan-opt/kan-opt',
-missing and no known rule to make it
-```
-
-The exported MLIR CMake configuration references `MLIRMlirOptMain`, but that
-library has apparently not yet been built in the torch-mlir unified build.
-
-The next step is therefore:
+The torch-mlir unified build needed the `MLIRMlirOptMain` target to be built
+once:
 
 ```bash
 ninja -C /src/torch-mlir/build-unified MLIRMlirOptMain
 ```
 
-Verify that the library exists:
-
-```bash
-ls -l /src/torch-mlir/build-unified/lib/libMLIRMlirOptMain*
-```
-
-Then retry:
+After that:
 
 ```bash
 cd /src/kan-mlir/build
 ninja kan-opt
 ```
-
-If additional MLIR libraries are reported as missing, build the corresponding
-targets in `/src/torch-mlir/build-unified` and retry.
 
 ## Testing
 
@@ -422,22 +408,156 @@ arith.addf
 tensor.insert
 ```
 
+## End-to-End Semantic Validation
+
+The current lowering has been validated by compiling and executing a small
+concrete test case independently checked in Python. The test uses batch size 2,
+2 input features, 2 output features, 5 pieces, degree 3, and boundaries
+`[-1.0, -0.6, -0.2, 0.2, 0.6, 1.0]`.
+
+The input
+
+```text
+[[-0.8,  0.1],
+ [ 0.7, -0.4]]
+```
+
+selects pieces `[0, 2]` and `[4, 1]`. The independent Python reference is:
+
+```text
+[[11.4, 52.85],
+ [14.9, 54.1]]
+```
+
+Generate and lower the test:
+
+```bash
+cd /src/kan-mlir
+source /opt/kanenv/bin/activate
+python test/make_concrete_test.py
+
+cd build
+./tools/kan-opt/kan-opt \
+  ../test/concrete_piecewise_poly.mlir \
+  --lower-kan-piecewise-poly \
+  -o concrete_lowered.mlir
+```
+
+Bufferize and lower structured control flow:
+
+```bash
+./tools/kan-opt/kan-opt \
+  concrete_lowered.mlir \
+  --one-shot-bufferize="bufferize-function-boundaries" \
+  -o concrete_bufferized.mlir
+
+./tools/kan-opt/kan-opt \
+  concrete_bufferized.mlir \
+  --convert-scf-to-cf \
+  -o concrete_cf.mlir
+```
+
+For the current MLIR build, explicit LLVM conversion passes are used:
+
+```bash
+./tools/kan-opt/kan-opt \
+  concrete_cf.mlir \
+  --convert-arith-to-llvm \
+  --convert-index-to-llvm \
+  --finalize-memref-to-llvm \
+  --convert-func-to-llvm \
+  --convert-cf-to-llvm \
+  --reconcile-unrealized-casts \
+  -o concrete_llvm.mlir
+```
+
+The generic `--convert-to-llvm` pass is not currently used because this custom
+driver does not yet register the conversion-interface extension promised by
+the `ub` dialect.
+
+Translate to LLVM IR and compile:
+
+```bash
+mlir-translate --mlir-to-llvmir concrete_llvm.mlir -o concrete.ll
+llc -filetype=obj concrete.ll -o concrete.o
+```
+
+The test declares an external `print_f32` helper:
+
+```c
+#include <stdio.h>
+
+void print_f32(float x)
+{
+    printf("%.8f\n", x);
+}
+```
+
+Compile, link, and execute with:
+
+```bash
+gcc -c print_f32.c -o print_f32.o
+gcc -no-pie concrete.o print_f32.o -o concrete_test
+./concrete_test
+```
+
+The compiled MLIR computation produces:
+
+```text
+11.39999962
+52.84999847
+14.89999962
+54.09999847
+```
+
+These values agree with the Python reference to FP32 rounding. The validated
+path is therefore:
+
+```text
+kan.piecewise_poly_linear
+        |
+        v
+SCF + tensor + arith
+        |
+        v
+bufferized memref IR
+        |
+        v
+control-flow + LLVM dialect
+        |
+        v
+LLVM IR
+        |
+        v
+native x86 executable
+```
+
+This establishes that the initial KAN representation lowering is not only
+syntactically valid MLIR but preserves the intended numerical semantics on a
+concrete executable test.
+
 ## Immediate Milestones
 
-The short-term path is:
+Completed:
 
-1. Build `MLIRMlirOptMain`.
-2. Build `kan-opt`.
-3. Parse the test `kan.piecewise_poly_linear` operation.
-4. Run `--lower-kan-piecewise-poly`.
-5. Fix any API differences between the prototype code and the exact MLIR
-   version in the torch-mlir build.
-6. Export the already-generated knot-aligned cubic coefficients from Python
+1. Build `MLIRMlirOptMain` and `kan-opt`.
+2. Parse and print `kan.piecewise_poly_linear`.
+3. Lower `kan.piecewise_poly_linear` to `scf`, `tensor`, and `arith`.
+4. Bufferize the lowered tensor computation.
+5. Lower through control flow and LLVM dialects to LLVM IR.
+6. Compile the LLVM IR to a native executable.
+7. Validate the executable result against an independent Python reference.
+
+Next:
+
+1. Export the already-generated knot-aligned cubic coefficients from KANLib
    into an MLIR test case.
-7. Execute the lowered computation and compare its output against KANLib.
-8. Establish the baseline GPU implementation and timing.
-9. Implement one or more hardware-aware lowering alternatives.
-10. Compare numerical error, execution time, and generated GPU code.
+2. Execute the real KANLib-derived piecewise-polynomial computation and compare
+   its output against KANLib.
+3. Establish a baseline GPU implementation and timing.
+4. Implement hardware-aware lowering alternatives.
+5. Compare numerical error, execution time, memory traffic, and generated GPU
+   code.
 
 ## Preliminary Evaluation Plan
 
@@ -447,7 +567,7 @@ The first performance table is expected to compare at least:
 |---|---:|---:|---:|---:|---:|
 | KANLib B-spline | -- | 3 | reference | TBD | 1.0x |
 | Knot-aligned polynomial | 5 | 3 | ~9.24e-7 | TBD | TBD |
-| MLIR baseline lowering | 5 | 3 | TBD | TBD | TBD |
+| MLIR baseline lowering | 5 | 3 | validated on synthetic executable test | TBD | TBD |
 | MLIR optimized lowering | 5 | 3 | TBD | TBD | TBD |
 
 Useful additional measurements include:
