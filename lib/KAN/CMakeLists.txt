@@ -1,6 +1,7 @@
 add_mlir_library(MLIRKANDialect
   KANDialect.cpp
   LowerPiecewisePoly.cpp
+  LowerPiecewisePolyGPU.cpp
 
   DEPENDS
   KANDialectIncGen
@@ -8,7 +9,9 @@ add_mlir_library(MLIRKANDialect
 
   LINK_LIBS PUBLIC
   MLIRArithDialect
+  MLIRGPUDialect
   MLIRIR
+  MLIRMemRefDialect
   MLIRPass
   MLIRSCFDialect
   MLIRSupport

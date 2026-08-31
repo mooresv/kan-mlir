@@ -10,7 +10,11 @@ namespace kan {
 
 std::unique_ptr<Pass> createLowerPiecewisePolyPass();
 
+std::unique_ptr<Pass> createLowerPiecewisePolyGPUPass();
+
 void registerKANPasses();
+
+void registerKANGPUPasses();
 
 } // namespace kan
 } // namespace mlir

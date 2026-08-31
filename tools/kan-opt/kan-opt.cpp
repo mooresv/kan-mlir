@@ -8,18 +8,25 @@
 
 #include "mlir/IR/DialectRegistry.h"
 #include "mlir/InitAllDialects.h"
+#include "mlir/InitAllExtensions.h"
 #include "mlir/InitAllPasses.h"
 #include "mlir/Tools/mlir-opt/MlirOptMain.h"
+#include "mlir/Target/LLVMIR/Dialect/All.h"
 
 int main(int argc, char **argv) {
   mlir::registerAllPasses();
 
   mlir::kan::registerKANPasses();
+  mlir::kan::registerKANGPUPasses();
 
   mlir::DialectRegistry registry;
 
   mlir::registerAllDialects(registry);
 
+  mlir::registerAllExtensions(registry);
+
+  mlir::registerAllGPUToLLVMIRTranslations(registry);
+  
   registry.insert<
       mlir::kan::KANDialect,
       mlir::arith::ArithDialect,
@@ -33,4 +40,5 @@ int main(int argc, char **argv) {
           argv,
           "KAN optimizer driver\n",
           registry));
+
 }
