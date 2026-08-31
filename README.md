@@ -38,7 +38,7 @@ Longer term, the compiler will use numerical constraints and target hardware
 characteristics to select among alternative learned-function representations
 and implementations.
 
-## Current Preliminary Result
+## Preliminary Result
 
 Experiments with a small KANLib layer use:
 
