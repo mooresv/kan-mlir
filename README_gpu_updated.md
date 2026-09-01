@@ -24,7 +24,7 @@ y_o = \sum_i \phi_{o,i}(x_i).
 $$
 
 For a degree-d B-spline, each learned edge function is a degree-d
-polynomial within each knot interval. This permits an exact change of
+polynomial within each knot interval. This allows an exact change of
 function representation from B-spline basis evaluation to direct
 piecewise-polynomial evaluation.
 
