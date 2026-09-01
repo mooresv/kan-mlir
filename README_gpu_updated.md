@@ -26,7 +26,7 @@ $$
 For a degree-d B-spline, each learned edge function is a degree-d
 polynomial within each knot interval. This allows an exact change of
 function representation from B-spline basis evaluation to direct
-piecewise-polynomial evaluation.
+piecewise polynomial evaluation.
 
 The compiler prototype is intended to investigate two related
 transformations:
