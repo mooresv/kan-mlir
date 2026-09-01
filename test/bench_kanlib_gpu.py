@@ -3,26 +3,43 @@ import torch
 
 from kanlib.nn.bspline import Linear
 
+def time_cuda(fn, warmup=100, iters=1000, profile_one=False):
 
-def time_cuda(fn, warmup=100, iters=1000):
     for _ in range(warmup):
         fn()
 
     torch.cuda.synchronize()
 
+    # Profile exactly one warmed-up invocation.
+    if profile_one:
+        print("Profiling one warmed-up KANLib forward invocation")
+
+        torch.cuda.nvtx.range_push("KANLIB_ONE_FORWARD")
+
+        fn()
+
+        # Ensure all kernels belonging to fn() finish before
+        # closing the NVTX range.
+        torch.cuda.synchronize()
+
+        torch.cuda.nvtx.range_pop()
+
+        return None
+
     start = torch.cuda.Event(enable_timing=True)
     stop = torch.cuda.Event(enable_timing=True)
 
     start.record()
+
     for _ in range(iters):
         fn()
-    stop.record()
 
+    stop.record()
     torch.cuda.synchronize()
 
     total_ms = start.elapsed_time(stop)
-    return total_ms / iters
 
+    return total_ms / iters
 
 def main():
     parser = argparse.ArgumentParser()
@@ -38,6 +55,11 @@ def main():
     )
     parser.add_argument("--warmup", type=int, default=100)
     parser.add_argument("--iters", type=int, default=1000)
+    parser.add_argument(
+        "--profile-one",
+        action="store_true",
+        help="After warmup, execute one forward inside an NVTX range and exit.",
+    )
     args = parser.parse_args()
 
     device = torch.device("cuda")
@@ -92,7 +114,11 @@ def main():
             run,
             warmup=args.warmup,
             iters=args.iters,
+            profile_one=args.profile_one,
         )
+
+        if args.profile_one:
+            return
 
         us = 1000.0 * ms
         outputs_per_s = batch * cfg["out_features"] / (ms * 1.0e-3)
