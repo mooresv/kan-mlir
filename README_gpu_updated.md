@@ -767,14 +767,15 @@ Completed:
 Next:
 
 1. Remove the temporary GPU deallocation workaround in the correctness path.
-2. Generalize GPU lowering beyond the current fixed small KAN layer.
-3. Evaluate additional KAN layer dimensions, spline grids, and learned models.
-4. Implement hardware-aware interval-selection and polynomial-evaluation
+2. Implement an optimized de Boor's algorithm baseline.
+3. Generalize GPU lowering beyond the current fixed small KAN layer.
+4. Evaluate additional KAN layer dimensions, spline grids, and learned models.
+5. Implement hardware-aware interval-selection and polynomial-evaluation
    alternatives.
-5. Add range/error analysis to guide representation selection.
-6. Measure memory traffic, instruction mix, achieved bandwidth/throughput,
+6. Add range/error analysis to guide representation selection.
+7. Measure memory traffic, instruction mix, achieved bandwidth/throughput,
    occupancy, and interval-selection cost.
-7. Compare exact knot-aligned transformations with controlled approximate
+8. Compare exact knot-aligned transformations with controlled approximate
    representations.
 
 ## Reproducing the GPU Benchmark
