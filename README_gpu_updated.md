@@ -41,7 +41,7 @@ Longer term, the compiler will use numerical constraints and target
 hardware characteristics to select among alternative learned-function
 representations and implementations.
 
-## Current Preliminary Result
+## Preliminary Result
 
 Experiments with a small KANLib layer use:
 
@@ -70,43 +70,17 @@ with the KANLib layer in the initial test.
 Polynomial fitting produced the following full-layer maximum absolute
 errors:
 
-  -------------------------------------------------------------------------
-  Representation               Pieces             Degree     Max abs. error
-  ---------------- ------------------ ------------------ ------------------
-  Global                            1                  3       1.342379e-01
-  polynomial                                             
-
-  Global                            1                  5       1.026966e-01
-  polynomial                                             
-
-  Uniform                           2                  3       6.734483e-02
-  piecewise                                              
-  polynomial                                             
-
-  Uniform                           2                  5       1.093743e-02
-  piecewise                                              
-  polynomial                                             
-
-  Uniform                           4                  3       8.056574e-03
-  piecewise                                              
-  polynomial                                             
-
-  Uniform                           4                  5       8.786395e-04
-  piecewise                                              
-  polynomial                                             
-
-  Uniform                           8                  3       9.142682e-04
-  piecewise                                              
-  polynomial                                             
-
-  Uniform                           8                  5       1.177043e-04
-  piecewise                                              
-  polynomial                                             
-
-  **Knot-aligned                **5**              **3**   **9.238720e-07**
-  piecewise                                              
-  polynomial**                                           
-  -------------------------------------------------------------------------
+| Representation | Pieces | Degree | Max abs. error |
+|---|---:|---:|---:|
+| Global polynomial | 1 | 3 | 1.342379e-01 |
+| Global polynomial | 1 | 5 | 1.026966e-01 |
+| Uniform piecewise polynomial | 2 | 3 | 6.734483e-02 |
+| Uniform piecewise polynomial | 2 | 5 | 1.093743e-02 |
+| Uniform piecewise polynomial | 4 | 3 | 8.056574e-03 |
+| Uniform piecewise polynomial | 4 | 5 | 8.786395e-04 |
+| Uniform piecewise polynomial | 8 | 3 | 9.142682e-04 |
+| Uniform piecewise polynomial | 8 | 5 | 1.177043e-04 |
+| **Knot-aligned piecewise polynomial** | **5** | **3** | **9.238720e-07** |
 
 The knot-aligned cubic representation is essentially exact at FP32
 precision. This is expected because a cubic B-spline combination is
