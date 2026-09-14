@@ -1,12 +1,13 @@
 # KAN-MLIR
 
-Prototype MLIR compiler infrastructure for transforming and lowering learned
-functions in Kolmogorov-Arnold Networks (KANs).
+Prototype MLIR compiler infrastructure for transforming and lowering
+learned functions in Kolmogorov-Arnold Networks (KANs).
 
-This repository currently focuses on a first proof of concept: representing a
-KAN layer whose learned B-spline edge functions have been transformed into
-piecewise polynomials, and lowering that representation to standard MLIR
-dialects.
+This repository currently focuses on an end-to-end proof of concept:
+transforming learned B-spline edge functions into knot-aligned piecewise
+polynomials, representing the transformed functions explicitly in MLIR,
+and lowering the resulting KAN operation to native CPU code and a fused
+NVIDIA GPU kernel.
 
 ## Research Goal
 
@@ -23,50 +24,54 @@ y_o = \sum_i \phi_{o,i}(x_i).
 $$
 
 For a degree-d B-spline, each learned edge function is a degree-d
-polynomial within each knot interval. This permits an exact change of function
-representation from B-spline basis evaluation to direct piecewise-polynomial
-evaluation.
+polynomial within each knot interval. This allows an exact change of
+function representation from B-spline basis evaluation to direct
+piecewise polynomial evaluation.
 
-The compiler prototype is intended to investigate two related transformations:
+The compiler prototype is intended to investigate two related
+transformations:
 
-1. **Accuracy-preserving representation transformation:** convert the B-spline
-   basis expansion to a knot-aligned piecewise polynomial.
-2. **Controlled approximation:** reduce the number of pieces and/or change the
-   polynomial representation to trade numerical error for execution cost.
+1.  **Accuracy preserving representation transformation:** convert the
+    B-spline basis expansion to a knot-aligned piecewise polynomial.
+2.  **Controlled approximation:** reduce the number of pieces and/or
+    change the polynomial representation to trade numerical error for
+    execution cost.
 
-Longer term, the compiler will use numerical constraints and target hardware
-characteristics to select among alternative learned-function representations
-and implementations.
+Longer term, the compiler will use numerical constraints and target
+hardware characteristics to select among alternative learned function
+representations and implementations.
 
 ## Preliminary Result
 
 Experiments with a small KANLib layer use:
 
-- input features: 2
-- output features: 8
-- B-spline grid size: 5
-- spline order/degree: 3
-- pure spline path (residual branch and separate spline weights disabled)
+-   input features: 2
+-   output features: 8
+-   B-spline grid size: 5
+-   spline order/degree: 3
+-   pure spline path (residual branch and separate spline weights
+    disabled)
 
 For this configuration, KANLib stores coefficients with shape:
 
-```text
+``` text
 [8, 2, 8]
 ```
 
 and a grid with shape:
 
-```text
+``` text
 [2, 12]
 ```
 
-The manually reconstructed basis-expansion computation agrees exactly with the
-KANLib layer in the initial test.
+The manually reconstructed basis expansion computation agrees exactly
+with the KANLib layer in the initial test.
 
-Polynomial fitting produced the following full-layer maximum absolute errors:
+Polynomial fitting produced the following full-layer maximum absolute
+errors:
 
 | Representation | Pieces | Degree | Max abs. error |
-|---|---:|---:|---:|
+| --- | ---: | ---: | ---: |
 | Global polynomial | 1 | 3 | 1.342379e-01 |
 | Global polynomial | 1 | 5 | 1.026966e-01 |
 | Uniform piecewise polynomial | 2 | 3 | 6.734483e-02 |
@@ -77,13 +82,13 @@ Polynomial fitting produced the following full-layer maximum absolute errors:
 | Uniform piecewise polynomial | 8 | 5 | 1.177043e-04 |
 | **Knot-aligned piecewise polynomial** | **5** | **3** | **9.238720e-07** |
 
-The knot-aligned cubic representation is essentially exact at FP32 precision.
-This is expected because a cubic B-spline combination is itself a cubic
-polynomial on each knot interval.
+The knot-aligned cubic representation is essentially exact at FP32
+precision. This is expected because a cubic B-spline combination is
+itself a cubic polynomial on each knot interval.
 
 The important compiler distinction is therefore:
 
-```text
+``` text
 B-spline basis expansion
         |
         | exact representation change
@@ -97,9 +102,10 @@ lower-cost approximate representation
 
 ## Repository Layout
 
-```text
+``` text
 kan-mlir/
 ├── CMakeLists.txt
+├── fit_kanlib_polynomials.py
 ├── include/
 │   └── KAN/
 │       ├── CMakeLists.txt
@@ -112,7 +118,8 @@ kan-mlir/
 │   └── KAN/
 │       ├── CMakeLists.txt
 │       ├── KANDialect.cpp
-│       └── LowerPiecewisePoly.cpp
+│       ├── LowerPiecewisePoly.cpp
+│       └── LowerPiecewisePolyGPU.cpp
 ├── tools/
 │   └── kan-opt/
 │       ├── CMakeLists.txt
@@ -120,22 +127,31 @@ kan-mlir/
 └── test/
     ├── piecewise_poly.mlir
     ├── make_concrete_test.py
-    └── concrete_piecewise_poly.mlir
     ├── make_kanlib_concrete_test.py
-    └── kanlib_concrete_piecewise_poly.mlir
+    ├── make_kanlib_gpu_benchmark.py
+    ├── export_kanlib_benchmark_data.py
+    ├── extract_fatbin.py
+    ├── bench_kanlib_gpu.py
+    ├── bench_generated_kernel.cpp
+    ├── bench_compiled_layer.cpp
+    ├── bench_compiled_layer_shiftmask.cpp
+    ├── bench_deboor_kernel.cu
+    ├── build_arith_fatbins.sh
+    ├── run_generated_kernel_benchmarks.sh
+    └── report_generated_kernel_benchmarks.py
 ```
 
 ## Initial KAN Dialect Operation
 
 The first operation is:
 
-```mlir
+``` mlir
 kan.piecewise_poly_linear
 ```
 
 For the current test case, its types are:
 
-```mlir
+``` mlir
 %x      : tensor<64x2xf32>
 %bounds : tensor<2x6xf32>
 %coeffs : tensor<8x2x5x4xf32>
@@ -144,7 +160,7 @@ For the current test case, its types are:
 
 A complete example is:
 
-```mlir
+``` mlir
 module {
   func.func @piecewise_poly(
       %x : tensor<64x2xf32>,
@@ -166,8 +182,8 @@ module {
 
 ### Semantics
 
-For batch element `b`, output feature `o`, and input feature `i`, the operation
-selects a piece `r` according to `x[b,i]` and evaluates
+For batch element `b`, output feature `o`, and input feature `i`, the
+operation selects a piece `r` according to `x[b,i]` and evaluates
 
 $$
 p_{o,i,r}(x) =
@@ -182,45 +198,45 @@ $$
 
 The coefficient tensor is organized as
 
-```text
+``` text
 [output_feature, input_feature, piece, coefficient]
 ```
 
 with coefficients stored in ascending power order:
 
-```text
+``` text
 [a0, a1, ..., ad]
 ```
 
-The number of pieces and polynomial degree are inferred from tensor shapes
-rather than stored as redundant attributes.
+The number of pieces and polynomial degree are inferred from tensor
+shapes rather than stored as redundant attributes.
 
 ## First Lowering
 
 The initial pass is:
 
-```text
+``` text
 --lower-kan-piecewise-poly
 ```
 
 It lowers
 
-```text
+``` text
 kan.piecewise_poly_linear
 ```
 
 to:
 
-- `scf`
-- `tensor`
-- `arith`
+-   `scf`
+-   `tensor`
+-   `arith`
 
 The current lowering is deliberately straightforward and serves as a
 correctness and performance baseline.
 
 Conceptually, it generates:
 
-```text
+``` text
 for b = 0 .. batch:
   for o = 0 .. output_features:
     acc = 0
@@ -242,7 +258,7 @@ for b = 0 .. batch:
 
 For the current five-piece case, interval selection is unrolled:
 
-```text
+``` text
 piece = 0
 if x >= bounds[i,1]: piece = 1
 if x >= bounds[i,2]: piece = 2
@@ -255,69 +271,69 @@ The MLIR lowering implements this with `arith.cmpf` and `arith.select`.
 This intentionally gives us a simple baseline against which to compare
 hardware-aware alternatives such as:
 
-- arithmetic selection for uniform intervals,
-- binary-search selection,
-- exponent-derived interval selection,
-- specialized selection for known knot structures.
+-   arithmetic selection for uniform intervals,
+-   binary search selection,
+-   exponent-derived interval selection,
+-   specialized selection for known knot structures.
 
-Polynomial evaluation currently uses Horner's method with `arith.mulf` and
-`arith.addf`. FMA generation and GPU-specific optimization are deferred to
-later lowering/optimization stages.
+Polynomial evaluation currently uses Horner's method with `arith.mulf`
+and `arith.addf`. FMA generation and GPU-specific optimization are
+deferred to later lowering/optimization stages.
 
 ## MLIR Environment
 
 The current MLIR installation comes from the existing torch-mlir unified
 build:
 
-```text
+``` text
 MLIR_DIR=/src/torch-mlir/build-unified/lib/cmake/mlir
 LLVM_DIR=/src/torch-mlir/build-unified/lib/cmake/llvm
 ```
 
 CMake has successfully located:
 
-```text
+``` text
 /src/torch-mlir/build-unified/lib/cmake/mlir/MLIRConfig.cmake
 /src/torch-mlir/build-unified/lib/cmake/llvm/LLVMConfig.cmake
 ```
 
 The Python/KANLib environment is:
 
-```text
+``` text
 /opt/kanenv
 ```
 
 Activate it with:
 
-```bash
+``` bash
 source /opt/kanenv/bin/activate
 ```
 
 The environment uses Python 3.13 and was created because KANLib requires
 Python 3.13 or later.
 
-**Important:** `/opt/kanenv` is inside the development Docker container. It
-survives stopping and restarting that container, but will not appear in a
-newly created container.
+**Important:** `/opt/kanenv` is inside the development Docker container.
+It survives stopping and restarting that container, but will not appear
+in a newly created container.
 
 ## Recovering the Development Container
 
 On the DGX host, list containers:
 
-```bash
+``` bash
 docker ps -a --format 'table {{.ID}}\t{{.Image}}\t{{.Status}}\t{{.Names}}'
 ```
 
 Restart the development container if necessary:
 
-```bash
+``` bash
 docker start <container-name-or-id>
 docker exec -it <container-name-or-id> bash
 ```
 
 Then reactivate the environment:
 
-```bash
+``` bash
 source /opt/kanenv/bin/activate
 ```
 
@@ -326,7 +342,7 @@ source /opt/kanenv/bin/activate
 Always configure from the top-level `kan-mlir` directory, **not** from
 `tools/kan-opt`.
 
-```bash
+``` bash
 cd /src/kan-mlir
 rm -rf build
 mkdir build
@@ -343,27 +359,27 @@ Configuration has successfully completed with this setup.
 
 The next target is:
 
-```bash
+``` bash
 cd /src/kan-mlir/build
 ninja kan-opt
 ```
 
 ### Current Build Status
 
-`kan-opt` now builds successfully against the torch-mlir unified MLIR build.
-The KAN dialect parses and prints correctly, and the
+`kan-opt` now builds successfully against the torch-mlir unified MLIR
+build. The KAN dialect parses and prints correctly, and the
 `--lower-kan-piecewise-poly` pass is registered and runs successfully.
 
-The torch-mlir unified build needed the `MLIRMlirOptMain` target to be built
-once:
+The torch-mlir unified build needed the `MLIRMlirOptMain` target to be
+built once:
 
-```bash
+``` bash
 ninja -C /src/torch-mlir/build-unified MLIRMlirOptMain
 ```
 
 After that:
 
-```bash
+``` bash
 cd /src/kan-mlir/build
 ninja kan-opt
 ```
@@ -372,20 +388,20 @@ ninja kan-opt
 
 Once `kan-opt` builds, first check that the pass is registered:
 
-```bash
+``` bash
 ./tools/kan-opt/kan-opt --help | grep kan
 ```
 
 Then test parsing without lowering:
 
-```bash
+``` bash
 ./tools/kan-opt/kan-opt \
   ../test/piecewise_poly.mlir
 ```
 
 Then run the first lowering:
 
-```bash
+``` bash
 ./tools/kan-opt/kan-opt \
   ../test/piecewise_poly.mlir \
   --lower-kan-piecewise-poly
@@ -393,13 +409,13 @@ Then run the first lowering:
 
 Successful lowering should eliminate:
 
-```text
+``` text
 kan.piecewise_poly_linear
 ```
 
 and produce IR containing operations such as:
 
-```text
+``` text
 tensor.empty
 scf.for
 tensor.extract
@@ -410,30 +426,31 @@ arith.addf
 tensor.insert
 ```
 
-## End-to-End Semantic Validation
+## Synthetic End-to-End Semantic Validation
 
-The current lowering has been validated by compiling and executing a small
-concrete test case independently checked in Python. The test uses batch size 2,
-2 input features, 2 output features, 5 pieces, degree 3, and boundaries
-`[-1.0, -0.6, -0.2, 0.2, 0.6, 1.0]`.
+The current lowering has been validated by compiling and executing a
+small concrete test case independently checked in Python. The test uses
+batch size 2, 2 input features, 2 output features, 5 pieces, degree 3,
+and boundaries `[-1.0, -0.6, -0.2, 0.2, 0.6, 1.0]`.
 
 The input
 
-```text
+``` text
 [[-0.8,  0.1],
  [ 0.7, -0.4]]
 ```
 
-selects pieces `[0, 2]` and `[4, 1]`. The independent Python reference is:
+selects pieces `[0, 2]` and `[4, 1]`. The independent Python reference
+is:
 
-```text
+``` text
 [[11.4, 52.85],
  [14.9, 54.1]]
 ```
 
 Generate and lower the test:
 
-```bash
+``` bash
 cd /src/kan-mlir
 source /opt/kanenv/bin/activate
 python test/make_concrete_test.py
@@ -447,7 +464,7 @@ cd build
 
 Bufferize and lower structured control flow:
 
-```bash
+``` bash
 ./tools/kan-opt/kan-opt \
   concrete_lowered.mlir \
   --one-shot-bufferize="bufferize-function-boundaries" \
@@ -461,7 +478,7 @@ Bufferize and lower structured control flow:
 
 For the current MLIR build, explicit LLVM conversion passes are used:
 
-```bash
+``` bash
 ./tools/kan-opt/kan-opt \
   concrete_cf.mlir \
   --convert-arith-to-llvm \
@@ -473,20 +490,20 @@ For the current MLIR build, explicit LLVM conversion passes are used:
   -o concrete_llvm.mlir
 ```
 
-The generic `--convert-to-llvm` pass is not currently used because this custom
-driver does not yet register the conversion-interface extension promised by
-the `ub` dialect.
+The generic `--convert-to-llvm` pass is not currently used because this
+custom driver does not yet register the conversion interface extension
+promised by the `ub` dialect.
 
 Translate to LLVM IR and compile:
 
-```bash
+``` bash
 mlir-translate --mlir-to-llvmir concrete_llvm.mlir -o concrete.ll
 llc -filetype=obj concrete.ll -o concrete.o
 ```
 
 The test declares an external `print_f32` helper:
 
-```c
+``` c
 #include <stdio.h>
 
 void print_f32(float x)
@@ -497,7 +514,7 @@ void print_f32(float x)
 
 Compile, link, and execute with:
 
-```bash
+``` bash
 gcc -c print_f32.c -o print_f32.o
 gcc -no-pie concrete.o print_f32.o -o concrete_test
 ./concrete_test
@@ -505,17 +522,17 @@ gcc -no-pie concrete.o print_f32.o -o concrete_test
 
 The compiled MLIR computation produces:
 
-```text
+``` text
 11.39999962
 52.84999847
 14.89999962
 54.09999847
 ```
 
-These values agree with the Python reference to FP32 rounding. The validated
-path is therefore:
+These values agree with the Python reference to FP32 rounding. The
+validated path is therefore:
 
-```text
+``` text
 kan.piecewise_poly_linear
         |
         v
@@ -534,9 +551,9 @@ LLVM IR
 native x86 executable
 ```
 
-This establishes that the initial KAN representation lowering is not only
-syntactically valid MLIR but preserves the intended numerical semantics on a
-concrete executable test.
+This establishes that the initial KAN representation lowering is not
+only syntactically valid MLIR but preserves the intended numerical
+semantics on a concrete executable test.
 
 ## KANLib-Derived End-to-End Validation
 
@@ -578,7 +595,7 @@ bufferization, control flow, the LLVM dialect, LLVM IR, and finally a
 native x86 executable.
 
 The native executable produces all 64 output values identically to the
-Python piecewise-polynomial reference at the printed eight-decimal
+Python piecewise polynomial reference at the printed eight-decimal
 precision:
 
 ``` text
@@ -637,212 +654,210 @@ expressed in the KAN dialect, lowered through standard MLIR and LLVM
 infrastructure, and executed while preserving the expected FP32
 numerical behavior.
 
-## GPU Lowering Status
+## GPU Lowering and H100 Validation
 
-The prototype now supports lowering `kan.piecewise_poly_linear` to an NVIDIA GPU kernel.
+The GPU pass
 
-The current GPU lowering maps one CUDA thread to each `(batch, output)` element. Each thread:
-
-1. loads the corresponding input features,
-2. selects the appropriate polynomial interval,
-3. evaluates each piecewise polynomial using Horner's method,
-4. accumulates over input features, and
-5. writes one output value.
-
-The resulting GPU dialect is lowered through MLIR GPU/NVVM to an `sm_90` cubin and executed on an NVIDIA H100.
-
-### End-to-End Correctness Test
-
-A concrete KANLib layer was used with:
-
-- 2 input features,
-- 8 output features,
-- cubic B-splines,
-- 5 knot-aligned polynomial pieces, and
-- 8 deterministic input samples.
-
-The compilation path was:
-
-```text
-KANLib cubic B-spline layer
-    -> knot-aligned piecewise-cubic representation
-    -> kan.piecewise_poly_linear
-    -> custom GPU lowering
-    -> MLIR bufferization
-    -> GPU/NVVM
-    -> sm_90 cubin
-    -> MLIR CUDA runtime
-    -> NVIDIA H100
+``` text
+--lower-kan-piecewise-poly-to-gpu
 ```
 
-The H100 kernel produced all 64 expected output values.
+lowers `kan.piecewise_poly_linear` to a single GPU kernel. One CUDA
+thread computes one `(batch, output)` element. Within the thread, the
+generated code selects the knot interval, evaluates each cubic
+polynomial with Horner's method, accumulates across input features, and
+writes the output.
 
-Comparison against the Python piecewise-polynomial reference:
+The current end-to-end GPU compilation path is:
 
-```text
-count:        64
-max abs err:  0.0
-RMS err:      0.0
+``` text
+KANLib B-spline parameters
+        |
+        v
+knot-aligned cubic coefficients
+        |
+        v
+kan.piecewise_poly_linear
+        |
+        v
+custom GPU lowering
+        |
+        v
+bufferized GPU IR
+        |
+        v
+GPU/NVVM lowering
+        |
+        v
+sm_90 fatbinary
+        |
+        v
+CUDA Driver API
+        |
+        v
+NVIDIA H100
 ```
 
-Thus, the current GPU lowering reproduces the reference piecewise-polynomial evaluation exactly to the precision printed by the test.
+For direct benchmarking, the generated kernel is extracted from the
+compiler produced fatbinary and launched through the CUDA Driver API
+with persistent device-resident input, output, boundary, and coefficient
+buffers. This avoids contaminating kernel measurements with allocation,
+host-device copies, unified memory migration, or stream creation.
 
-### Current Limitation
+The generated GPU implementation has been validated against the
+independent piecewise polynomial reference over all benchmarked batch
+sizes. The maximum absolute and RMS errors were zero in these tests.
 
-The pinned MLIR version lowers `gpu.alloc` to `mgpuMemAlloc`, but leaves `gpu.dealloc` connected through unrealized LLVM-descriptor-to-memref casts. These casts prevent final LLVM IR translation.
+## Preliminary H100 Performance
 
-For the current correctness prototype, the `gpu.dealloc` operations are therefore omitted before final LLVM translation. This is acceptable for the short-lived correctness executable, since the allocations are reclaimed when the process exits, but proper GPU allocation/deallocation lowering remains a TODO before this path is used for repeated benchmarking.
+The initial performance experiment uses a KANLib layer with 2 inputs, 8
+outputs, grid size 5, and cubic B-spline edge functions. All timings
+below use an NVIDIA H100 80 GB HBM3 GPU. The comparison separates
+framework overhead, implementation specialization, and function
+representation.
 
-### GPU Correctness-Test Pipeline
+We compare four implementations of the same trained layer:
 
-Generate the concrete KANLib test:
+1.  **KANLib:** the original framework B-spline layer.
+2.  **warpKAN:** an optimized GPU implementation of B-spline KAN
+    evaluation.
+3.  **Optimized de Boor:** a specialized fused CUDA kernel that retains
+    the B-spline representation.
+4.  **MLIR polynomial:** the compiler-generated knot-aligned
+    piecewise-cubic representation and fused GPU implementation.
 
-```bash
-cd /src/kan-mlir
-python test/make_kanlib_concrete_test.py
-```
+| Batch | KANLib (us) | warpKAN (us) | de Boor (us) | MLIR polynomial (us) |
+| ---: | ---: | ---: | ---: | ---: |
+| 256 | 208.833 | 11.113 | 2.347 | 2.715 |
+| 1,024 | 213.007 | 11.691 | 2.393 | 2.833 |
+| 4,096 | 218.245 | 11.551 | 2.583 | 2.954 |
+| 16,384 | 208.705 | 11.920 | 2.895 | 3.239 |
+| 65,536 | 209.745 | 17.956 | 5.212 | 5.583 |
 
-Lower the KAN operation to the GPU representation and bufferize the host-side tensor operations:
+The specialized kernels reduce layer latency dramatically relative to
+KANLib and are also substantially faster than warpKAN for this small
+layer. However, the optimized de Boor implementation is faster than the
+piecewise polynomial implementation at every tested batch size. This is
+an important result: changing from a B-spline basis expansion to an
+exact piecewise polynomial representation does **not** by itself
+guarantee a performance improvement. Specialization, fusion, interval
+selection, instruction mix, memory behavior, and target-specific
+implementation choices all matter.
 
-```bash
-cd /src/kan-mlir/build
+The compiler prototype now includes alternative interval selection and
+benchmarking paths. `bench_compiled_layer_shiftmask.cpp` supports
+experiments with shift/mask-style interval selection, while
+`build_arith_fatbins.sh` builds the corresponding arithmetic selection
+GPU binaries. `bench_deboor_kernel.cu` provides the optimized de Boor
+baseline used to isolate representation choice from the benefits of
+specialization and fusion.
 
-./tools/kan-opt/kan-opt \
-  ../test/kanlib_concrete_piecewise_poly.mlir \
-  --lower-kan-piecewise-poly-to-gpu \
-  --one-shot-bufferize="bufferize-function-boundaries" \
-  -o /tmp/kanlib_gpu_bufferized.mlir
-```
+Preliminary Nsight Compute profiling at batch size 65,536 further
+motivates a target-aware cost model. The de Boor, MLIR polynomial, and
+warpKAN kernels execute approximately 100, 165, and 679 dynamic SASS
+instructions per warp, respectively. Despite more global loads and
+poorer scheduler readiness than the polynomial kernel, de Boor is
+faster. Conversely, warpKAN has higher scheduler readiness and occupancy
+but executes about 4.1x as many instructions as the polynomial kernel
+and is substantially slower.
 
-Lower the GPU kernel through NVVM and generate an `sm_90` cubin:
-
-```bash
-./tools/kan-opt/kan-opt \
-  /tmp/kanlib_gpu_bufferized.mlir \
-  --gpu-lower-to-nvvm-pipeline="cubin-chip=sm_90 opt-level=3" \
-  -o /tmp/kanlib_gpu_nvvm.mlir
-```
-
-For the current prototype, remove the `gpu.dealloc` operations and eliminate the resulting dead unrealized conversion casts:
-
-```bash
-grep -v 'gpu.dealloc' \
-  /tmp/kanlib_gpu_nvvm.mlir \
-  > /tmp/kanlib_gpu_nodealloc.mlir
-
-./tools/kan-opt/kan-opt \
-  /tmp/kanlib_gpu_nodealloc.mlir \
-  --canonicalize \
-  --reconcile-unrealized-casts \
-  -o /tmp/kanlib_gpu_clean.mlir
-```
-
-Translate the resulting MLIR to LLVM IR:
-
-```bash
-mlir-translate \
-  --mlir-to-llvmir \
-  /tmp/kanlib_gpu_clean.mlir \
-  -o /tmp/kanlib_gpu.ll
-```
-
-Compile the LLVM IR:
-
-```bash
-llc \
-  -filetype=obj \
-  /tmp/kanlib_gpu.ll \
-  -o /tmp/kanlib_gpu.o
-```
-
-Compile the `print_f32` helper used by the generated correctness test:
-
-```bash
-g++ -std=c++14 \
-  -c ../test/print_f32.cpp \
-  -o /tmp/print_f32.o
-```
-
-Link against the MLIR CUDA runtime:
-
-```bash
-g++ \
-  /tmp/kanlib_gpu.o \
-  /tmp/print_f32.o \
-  -L/src/kan-mlir/runtime \
-  -lmlir_cuda_runtime \
-  -L/usr/lib64 \
-  -lcuda \
-  -Wl,-rpath,/src/kan-mlir/runtime \
-  -no-pie \
-  -o /tmp/kanlib_gpu_test
-```
-
-Run the H100 correctness test:
-
-```bash
-/tmp/kanlib_gpu_test
-```
-
-The executable prints the 64 elements of the resulting `8 x 8` output tensor.
-
-The reference values are generated by `make_kanlib_concrete_test.py` using the same knot-aligned polynomial coefficients, interval-selection semantics, and Horner evaluation implemented by the MLIR lowering.
+Thus, instruction count, memory traffic, occupancy, and stall metrics do
+not individually predict performance across alternative representations
+and implementations. These results motivate compiler-directed joint
+selection of function representation and hardware implementation rather
+than assuming that any one representation is inherently fastest.
 
 ## Immediate Milestones
 
 Completed:
 
-1. Build `MLIRMlirOptMain` and `kan-opt`.
-2. Parse and print `kan.piecewise_poly_linear`.
-3. Lower `kan.piecewise_poly_linear` to `scf`, `tensor`, and `arith`.
-4. Bufferize the lowered tensor computation.
-5. Lower through control flow and LLVM dialects to LLVM IR.
-6. Compile the LLVM IR to a native executable.
-7. Validate the executable result against an independent Python reference.
-8.  Export real knot-aligned cubic coefficients derived from KANLib into
-    MLIR.
-9.  Reconstruct the source KANLib layer and compare it with the
-    polynomial form.
-10. Compile and execute the KANLib-derived MLIR test end to end.
-11. Verify that the native result matches the Python polynomial
+1.  Build `MLIRMlirOptMain` and `kan-opt`.
+
+2.  Parse and print `kan.piecewise_poly_linear`.
+
+3.  Lower `kan.piecewise_poly_linear` to `scf`, `tensor`, and `arith`.
+
+4.  Validate the CPU lowering against synthetic and KANLib-derived
+    references.
+
+5.  Transform KANLib cubic B-spline functions to knot-aligned cubics.
+
+6.  Implement `--lower-kan-piecewise-poly-to-gpu`.
+
+7.  Lower through MLIR GPU/NVVM to an `sm_90` binary.
+
+8.  Execute the generated binary on an NVIDIA H100.
+
+9.  Validate generated GPU outputs against the independent polynomial
     reference.
+
+10. Build a persistent device-resident CUDA Driver API benchmark.
+
+11. Measure generated-kernel and compiled-layer invocation latency.
+
+12. Profile the KANLib reference with Nsight Systems and quantify its
+    32--33-kernel execution structure.
+
+13. Implement and benchmark an optimized de Boor baseline.
+
+14. Add alternative arithmetic/shift-mask interval selection
+    experiments.
+
+15. Profile de Boor, MLIR polynomial, and warpKAN kernels with Nsight
+    Compute to compare instruction mix, memory behavior, occupancy, and
+    stalls.
 
 Next:
 
-1. Establish a baseline GPU implementation and timing.
-2. Lower the piecewise-polynomial GPU implementation and do timing.
-4. Implement hardware-aware interval selection and polynomial evaluation alternatives.
-4. Compare KANLib, baseline MLIR, and optimized MLIR implementations.
-5. Measure numerical error, execution time, memory traffic, and instruction mix for generated GPU code.
+1.  Remove the temporary GPU deallocation workaround in the correctness
+    path.
+2.  Generalize GPU lowering beyond the current fixed small KAN layer.
+3.  Evaluate additional KAN layer dimensions, spline grids, and learned
+    models.
+4.  Extend hardware-aware interval selection and polynomial evaluation
+    alternatives.
+5.  Add range/error analysis to guide representation selection.
+6.  Develop and calibrate target-aware performance models from the
+    profiling results.
+7.  Compare exact knot-aligned transformations with controlled
+    approximate representations.
 
-## Preliminary Evaluation Plan
+## Reproducing the GPU Benchmark
 
-The first performance table is expected to compare at least:
+The benchmark sweep uses one static-shape compiled kernel per batch
+size:
 
-| Representation / implementation | Pieces | Degree | Error | GPU time | Speedup |
-|---|---:|---:|---:|---:|---:|
-| KANLib B-spline | -- | 3 | reference | TBD | 1.0x |
-| Knot-aligned polynomial | 5 | 3 | ~9.24e-7 | TBD | TBD |
-| MLIR baseline lowering | 5 | 3 | matches Python polynomial reference at printed 8-decimal precision | TBD | TBD |
-| MLIR optimized lowering | 5 | 3 | TBD | TBD | TBD |
+``` bash
+cd /src/kan-mlir
+source /opt/kanenv/bin/activate
 
-Useful additional measurements include:
+bash test/run_generated_kernel_benchmarks.sh
+python test/report_generated_kernel_benchmarks.py
+```
 
-- kernel execution time,
-- end-to-end layer execution time,
-- intermediate storage/materialization,
-- global-memory traffic,
-- instruction mix,
-- achieved memory bandwidth,
-- achieved compute throughput,
-- interval-selection overhead.
+The benchmark path uses bare-pointer kernel calling convention during
+GPU/NVVM lowering so that the compiler-generated kernel can be launched
+directly through the CUDA Driver API with persistent device buffers.
+
+The KANLib reference benchmark is in:
+
+``` text
+test/bench_kanlib_gpu.py
+```
+
+A single warmed-up forward can be marked with an NVTX range for Nsight
+Systems analysis using:
+
+``` bash
+python test/bench_kanlib_gpu.py   --batches 256   --warmup 100   --profile-one
+```
 
 ## Longer-Term Compiler Direction
 
-The initial operation and lowering are only a starting point. The intended
-compiler structure is roughly:
+The initial operation and lowering are only a starting point. The
+intended compiler structure is roughly:
 
-```text
+``` text
 trained KAN / learned computation
               |
               v
@@ -862,8 +877,9 @@ trained KAN / learned computation
    GPU / accelerator code
 ```
 
-The main research question is whether a compiler can
-treat learned scalar functions as transformable IR objects and select
-function representations and implementations according to numerical,
-reliability, and hardware constraints. This distinguishes the project from work that proposes a single alternative
-KAN basis or a single hand-optimized GPU implementation.
+The main research question is whether a compiler can treat learned
+scalar functions as transformable IR objects and select function
+representations and implementations according to numerical, reliability,
+and hardware constraints. This distinguishes the project from work that
+proposes a single alternative KAN basis or a single hand-optimized GPU
+implementation.

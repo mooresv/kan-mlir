@@ -130,6 +130,14 @@ def main():
     coeffs.tofile(outdir / "coeffs.bin")
     expected.tofile(outdir / "expected.bin")
 
+    saved["grid"].detach().cpu().float().contiguous().numpy().tofile(
+        outdir / "grid.bin"
+    )
+
+    saved["source_coefficients"].detach().cpu().float().contiguous().numpy().tofile(
+        outdir / "source_coeffs.bin"
+    )
+
     print(f"batch       : {args.batch_size}")
     print(f"din         : {Din}")
     print(f"dout        : {Dout}")

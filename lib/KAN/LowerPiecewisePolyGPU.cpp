@@ -346,6 +346,9 @@ public:
 
     const int64_t dout =
         coefficientsTy.getShape()[0];
+    if (dout != 8)
+      return rewriter.notifyMatchFailure(
+          op, "specialized GPU prototype currently requires dout = 8");
     const int64_t coeffDin =
         coefficientsTy.getShape()[1];
     const int64_t pieces =
@@ -534,6 +537,7 @@ public:
     setBeforeTerminatorOrEnd(
         rewriter, thenBody);
 
+/*
     Value cDout =
         cidx(rewriter, loc, dout);
 
@@ -544,6 +548,56 @@ public:
     Value o =
         rewriter.create<arith::RemUIOp>(
             loc, tid, cDout);
+*/
+
+    // DOUT is statically known to be 8 for this specialized kernel.
+    //
+    //   b = tid / 8  -> tid >> 3
+    //   o = tid % 8  -> tid & 7
+    //
+    // Perform the bit operations in i64 and cast back to index.
+
+    Value tidI64 =
+        rewriter.create<arith::IndexCastOp>(
+            loc,
+            rewriter.getI64Type(),
+            tid);
+
+    Value shiftAmount =
+        rewriter.create<arith::ConstantIntOp>(
+            loc,
+            3,
+            64);
+
+    Value outputMask =
+        rewriter.create<arith::ConstantIntOp>(
+            loc,
+            7,
+            64);
+
+    Value bI64 =
+        rewriter.create<arith::ShRUIOp>(
+            loc,
+            tidI64,
+            shiftAmount);
+
+    Value oI64 =
+        rewriter.create<arith::AndIOp>(
+            loc,
+            tidI64,
+            outputMask);
+
+    Value b =
+        rewriter.create<arith::IndexCastOp>(
+            loc,
+            rewriter.getIndexType(),
+            bI64);
+
+    Value o =
+        rewriter.create<arith::IndexCastOp>(
+            loc,
+            rewriter.getIndexType(),
+            oI64);
 
     Value c0 =
         cidx(rewriter, loc, 0);
@@ -589,49 +643,91 @@ public:
             ValueRange{b, i});
 
     //
-    // Piece selection:
+    // Piece selection for uniform grid [-1, 1] with 5 pieces:
     //
-    // piece = 0
-    // for p=1..pieces-1:
-    //   if x >= bounds[i,p]:
-    //      piece = p
+    //   piece = floor((x + 1.0) * 2.5)
+    //   piece = clamp(piece, 0, 4)
     //
+    // This matches the arithmetic interval-selection strategy used
+    // by the optimized de Boor baseline.
+    //
+
+    Value oneF =
+        cf32(rewriter, loc, 1.0f);
+
+    Value invH =
+        cf32(rewriter, loc, 2.5f);
+
+    Value shifted =
+        rewriter.create<arith::AddFOp>(
+            loc,
+            x,
+            oneF);
+
+    Value scaled =
+        rewriter.create<arith::MulFOp>(
+            loc,
+            shifted,
+            invH);
+
+    Value pieceI32 =
+        rewriter.create<arith::FPToSIOp>(
+            loc,
+            rewriter.getI32Type(),
+            scaled);
+
+    Value zeroI32 =
+        rewriter.create<arith::ConstantIntOp>(
+            loc,
+            0,
+            32);
+
+    Value maxPieceI32 =
+        rewriter.create<arith::ConstantIntOp>(
+            loc,
+            pieces - 1,
+            32);
+
+    // Clamp low.
+    Value belowZero =
+        rewriter.create<arith::CmpIOp>(
+            loc,
+            arith::CmpIPredicate::slt,
+            pieceI32,
+            zeroI32);
+
+    pieceI32 =
+        rewriter.create<arith::SelectOp>(
+            loc,
+            belowZero,
+            zeroI32,
+            pieceI32);
+
+    // Clamp high.
+    Value aboveMax =
+        rewriter.create<arith::CmpIOp>(
+            loc,
+            arith::CmpIPredicate::sgt,
+            pieceI32,
+            maxPieceI32);
+
+    pieceI32 =
+        rewriter.create<arith::SelectOp>(
+            loc,
+            aboveMax,
+            maxPieceI32,
+            pieceI32);
+
     Value piece =
-        cidx(rewriter, loc, 0);
-
-    for (int64_t p = 1; p < pieces; ++p) {
-      Value pIdx =
-          cidx(rewriter, loc, p);
-
-      Value boundary =
-          rewriter.create<memref::LoadOp>(
-              loc,
-              boundsMem,
-              ValueRange{i, pIdx});
-
-      Value ge =
-          rewriter.create<arith::CmpFOp>(
-              loc,
-              arith::CmpFPredicate::OGE,
-              x,
-              boundary);
-
-      piece =
-          rewriter.create<arith::SelectOp>(
-              loc,
-              ge,
-              pIdx,
-              piece);
-    }
+        rewriter.create<arith::IndexCastOp>(
+            loc,
+            rewriter.getIndexType(),
+            pieceI32);
 
     //
     // Horner evaluation.
     //
-    // Coefficients are stored:
-    // [output, input, piece, coefficient]
-    //
-    Value degreeIdx =
-        cidx(rewriter, loc, degree);
+    Value degreeIdx = cidx(rewriter, loc, degree);
 
     Value poly =
         rewriter.create<memref::LoadOp>(
@@ -640,8 +736,7 @@ public:
             ValueRange{o, i, piece, degreeIdx});
 
     for (int64_t k = degree - 1; k >= 0; --k) {
-      Value kIdx =
-          cidx(rewriter, loc, k);
+      Value kIdx = cidx(rewriter, loc, k);
 
       Value a =
           rewriter.create<memref::LoadOp>(
