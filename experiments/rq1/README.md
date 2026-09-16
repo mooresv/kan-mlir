@@ -479,3 +479,221 @@ during training. The number of polynomial regions provides a tunable
 representation choice that trades numerical fidelity against representation
 complexity while preserving the learned model to a selectable tolerance.
 
+## Real-Data Classification: Wisconsin Diagnostic Breast Cancer
+
+To evaluate whether the post-training representation transformation also
+preserves a trained KAN on a standard real-world dataset, we use the
+Wisconsin Diagnostic Breast Cancer (WDBC) classification task.
+
+The dataset contains 569 examples with 30 continuous input features and two
+classes. We use a fixed stratified 60/20/20 split:
+
+|  |  |
+|---|---:|
+| Training | 341 examples |
+| Calibration | 114 examples |
+| Test | 114 examples |
+
+Input features are standardized using statistics computed from the training
+set only. The calibration set is not used for training; it is used only to
+determine activation ranges for the approximate polynomial representations.
+The test set remains untouched until final evaluation.
+
+The trained KAN has architecture
+
+$$30 \rightarrow 16 \rightarrow 16 \rightarrow 2,$$
+
+with cubic B-spline activations, grid size 5, and spline order 3. The model is
+trained for 200 epochs with Adam using a learning rate of $10^{-3}$ and batch
+size 64. No retraining or fine-tuning is performed after representation
+transformation.
+
+The original trained KAN achieves:
+
+|  |  |
+|---|---:|
+| Test accuracy | 95.6140% |
+| Correct predictions | 109 / 114 |
+| Test cross entropy | 0.154786 |
+
+### Activation support
+
+Unlike the synthetic experiments, standardized WDBC inputs and internal
+activations are not restricted to the nominal KAN input domain. The retained
+cubic B-spline basis functions have finite support over the extended knot
+range $[-2.2,2.2]$.
+
+A substantial number of activations fall outside this support:
+
+| Split | Layer | Activations outside support | Examples with at least one outside |
+|---|---:|---:|---:|
+| Training | 0 | 3.24% | 27.57% |
+| Training | 1 | 6.14% | 31.38% |
+| Training | 2 | 14.33% | 80.06% |
+| Calibration | 0 | 3.57% | 29.82% |
+| Calibration | 1 | 6.20% | 33.33% |
+| Calibration | 2 | 14.04% | 74.56% |
+| Test | 0 | 4.09% | 30.70% |
+| Test | 1 | 6.41% | 27.19% |
+| Test | 2 | 13.10% | 70.18% |
+
+The observed test activation ranges are substantially wider than the spline
+support:
+
+| Layer | Test activation range |
+|---|---:|
+| 0 | $[-2.836,\ 11.952]$ |
+| 1 | $[-7.860,\ 9.533]$ |
+| 2 | $[-6.429,\ 7.954]$ |
+
+This does not require extrapolating the original B-spline. KANLib's spline
+contribution is zero outside the extended knot support, while the residual
+SiLU branch remains active. The transformed representation therefore
+explicitly preserves this behavior:
+
+$$
+\widetilde{S}(x)=
+\begin{cases}
+P_j(x), & x \in [k_j,k_{j+1}),\\
+0, & x \notin [-2.2,2.2].
+\end{cases}
+$$
+
+The residual branch is left unchanged.
+
+### Post-training polynomial representations
+
+As in the synthetic experiments, the trained model is frozen before
+transformation. We evaluate 1-, 2-, 4-, and 8-piece approximate cubic
+representations together with an exact knot-aligned representation.
+
+For the approximate representations, each input feature is fitted over the
+intersection of its calibration activation range and the true B-spline
+support. Values that remain inside the spline support but fall outside the
+calibrated approximation interval use the nearest end polynomial. Values
+outside the true spline support produce zero spline contribution.
+
+The exact representation uses all 11 intervals of the extended cubic knot
+vector and therefore covers the complete B-spline support.
+
+### End-to-end results
+
+| Representation | Pieces | Test accuracy | Prediction agreement | Changed predictions | Logit RMS error | Max error | Relative RMS |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 1-piece | 1 | 96.4912% | 97.3684% | 3 | $9.57\times10^{-1}$ | $3.35$ | $1.88\times10^{-1}$ |
+| 2-piece | 2 | 95.6140% | 100.0000% | 0 | $5.57\times10^{-1}$ | $3.41$ | $1.10\times10^{-1}$ |
+| 4-piece | 4 | 95.6140% | 100.0000% | 0 | $3.43\times10^{-1}$ | $2.91$ | $6.77\times10^{-2}$ |
+| 8-piece | 8 | 95.6140% | 100.0000% | 0 | $3.00\times10^{-1}$ | $2.72$ | $5.91\times10^{-2}$ |
+| Exact knot-aligned | 11 | 95.6140% | 100.0000% | 0 | $3.89\times10^{-7}$ | $1.91\times10^{-6}$ | $7.67\times10^{-8}$ |
+
+The exact knot-aligned transformation reproduces the original trained model
+to approximately FP32 numerical precision. Its relative logit RMS error is
+$7.67\times10^{-8}$, and it changes none of the 114 test predictions. This
+remains true even though many intermediate activations lie far outside the
+finite support of the learned B-spline functions.
+
+The approximate representations also preserve classification behavior
+surprisingly well. The 2-, 4-, and 8-piece representations all produce
+exactly the same test predictions as the original trained KAN. The 1-piece
+representation changes three predictions. Its slightly higher test accuracy
+should not be interpreted as better preservation of the trained model:
+prediction agreement, rather than accuracy alone, reveals that its behavior
+has changed.
+
+### Calibration-domain extrapolation
+
+The WDBC experiment also exposes an important limitation of approximation
+domains inferred only from calibration data. Approximately 2--3% of test
+activations fall outside their per-feature calibration ranges. Some of these
+activations remain inside the true B-spline support and therefore require
+evaluation of a nonzero spline function.
+
+The largest approximate errors are strongly localized to these cases. For
+example, for layer 1 an input feature has calibrated approximation interval
+
+$$[0.128,\ 2.2],$$
+
+while a test activation reaches
+
+$$x=-1.117.$$
+
+This activation lies outside the calibrated approximation interval but
+inside the true spline support $[-2.2,2.2]$. The end polynomial must therefore
+be extrapolated far beyond its fitting interval. For the 8-piece
+representation, this single edge contributes approximately 5.51 to a maximum
+layer-output error of approximately 5.51.
+
+A similar effect occurs in layer 2, where a test activation of approximately
+2.175 lies inside the spline support but outside its calibrated approximation
+interval, whose upper endpoint is approximately 1.652. This edge dominates
+the maximum local error for both the 4- and 8-piece representations.
+
+In contrast, edge errors for activations lying inside their calibrated
+approximation intervals are much smaller. Thus, the large maximum errors are
+caused primarily by extrapolation beyond the empirically calibrated domain,
+rather than by poor polynomial approximation within the fitted domain.
+
+This produces an important distinction between **representation complexity**
+and **representation domain**. Increasing the number of polynomial pieces
+improves approximation resolution within the fitted domain, but does not
+guarantee improved behavior outside that domain.
+
+### Implications for compiler-directed representation selection
+
+The WDBC result suggests that post-training representation selection must
+consider not only the computational representation but also the domain over
+which its approximation guarantee is intended to hold.
+
+A compiler could therefore associate a transformed representation
+$\widetilde{F}_{r,D}$ with both a representation $r$ and a validity domain
+$D$, and solve a constrained selection problem such as
+
+$$
+(r^*,D^*) =
+\arg\min_{r,D} C(r,D,x,H)
+\quad
+\text{subject to}
+\quad
+E(F,\widetilde{F}_{r,D}) \le \epsilon.
+$$
+
+One possible implementation is a guarded hybrid representation:
+
+$$
+\widetilde{S}(x)=
+\begin{cases}
+P(x), & x \in D_{\mathrm{cal}},\\
+S(x), & x \in D_{\mathrm{support}}\setminus D_{\mathrm{cal}},\\
+0, & x \notin D_{\mathrm{support}},
+\end{cases}
+$$
+
+where the approximate polynomial is used over the calibrated domain, the
+original spline provides a fallback for uncovered portions of its support,
+and the spline contribution is known to be zero outside its mathematical
+support.
+
+We do not use this hybrid scheme in the RQ1 experiments. The current
+experiment deliberately retains calibration-derived approximation domains so
+that the effects of incomplete domain coverage remain visible. The result
+motivates domain-aware representation selection as a compiler problem rather
+than modifying the experiment after observing the test set.
+
+### RQ1 takeaway
+
+The WDBC experiment extends the synthetic RQ1 results to a standard real-data
+classification task. It provides two complementary observations:
+
+1. A trained multi-layer KAN can be transformed post-training into an exact
+   knot-aligned polynomial representation without retraining, reproducing
+   model outputs to FP32-level numerical precision even when intermediate
+   activations extend well beyond the spline support.
+
+2. Approximate representations can preserve the model's classification
+   decisions with substantially fewer polynomial regions, but their numerical
+   fidelity depends on both representation complexity and activation-domain
+   coverage.
+
+Together with the synthetic regression and classification experiments, these
+results support the central RQ1 premise that a learned KAN function need not
+remain tied to the computational representation used during training.
