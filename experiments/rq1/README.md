@@ -32,12 +32,7 @@ complexity, numerical fidelity, and task-level accuracy.
 The first experiment trains a three-layer KAN on the synthetic
 regression problem
 
-$$
-y =
-\sin(\pi x_1 x_2)
-+ (x_3 - 0.5)^2
-+ 0.5 x_4,
-$$
+$$y = \sin(\pi x_1 x_2) + (x_3 - 0.5)^2 + 0.5x_4,$$
 
 where each input is sampled uniformly from
 
@@ -64,7 +59,7 @@ The model contains 336 leanred spline edge functions:
 The experiment uses three independent datasets:
 
 |  |  |
-| ----- | ----- | ----- |
+|---|---|
 | Training: |    10,000 examples |
 | Calibration: |  2,500 examples |
 | Test:        |  5,000 examples |
@@ -194,11 +189,7 @@ that layer.
 
 The transformed network consumes its own transformed activations:
 
-$$
-\tilde{x}_{l+1}
-=
-\tilde{F}_l(\tilde{x}_l).
-$$
+$$\tilde{x}_{l+1} = \tilde{F}_l(\tilde{x}_l).$$
 
 This measures how representation errors propagate through the complete
 network.
@@ -260,17 +251,23 @@ specific hardware is investigated separately under RQ2.
 
 ## Files
 
-### `train_kan_regression.py`
+```bash
+train_kan_regression.py
+```
 
 Trains the regression KAN and generates the training, calibration, and
 test datasets.
 
-### `transform_trained_regression.py`
+```bash
+transform_trained_regression.py
+```
 
 Constructs the 1-, 2-, 4-, 8-piece and exact knot-aligned polynomial
 representations and evaluates their numerical and task-level errors.
 
-### `check_regression_ranges.py`
+```bash
+check_regression_ranges.py
+```
 
 Diagnostic program used to inspect the activation ranges of the
 trained multilayer KAN.
