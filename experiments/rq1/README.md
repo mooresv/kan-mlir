@@ -123,7 +123,7 @@ vector contains 12 knots and therefore 11 polynomial intervals.
 The residual SiLU branch of each KANLib layer is preserved unchanged.
 Only the learned spline contribution is transformed.
 
-## Exact B-Spline Support
+### Exact B-Spline Support
 
 For the configuration used here, KANLib constructs the extended knot
 vector
@@ -140,7 +140,7 @@ Consequently, the exact transformation uses all 11 knot intervals
 rather than only the five intervals in the nominal spline range.
 
 
-## Current Regression Result
+### Current Regression Result
 
 The trained original KAN achieves
 
@@ -169,7 +169,7 @@ The 4-piece representation increases task RMSE by approximately
 approximately 0.044%, without retraining.
 
 
-## Error Propagation
+### Error Propagation
 
 The program reports two types of error.
 
@@ -204,7 +204,7 @@ difference is
 after transforming all 336 spline edge functions.
 
 
-## Calibration-Range Coverage
+### Calibration-Range Coverage
 
 The approximate representations use only calibration-set activation
 ranges.
@@ -225,7 +225,7 @@ For approximate representations, values outside the calibration range
 are evaluated by extrapolating the nearest end polynomial piece.
 
 
-## Interpretation
+### Interpretation
 
 These results demonstrate two forms of post-training representation
 flexibility.
@@ -249,7 +249,7 @@ Whether these representations provide different execution costs on
 specific hardware is investigated separately under RQ2.
 
 
-## Files
+### Files
 
 ```bash
 train_kan_regression.py
