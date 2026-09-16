@@ -278,10 +278,204 @@ The regression experiments has demonstrated the following:
 
 > **A trained multilayer KAN can be transformed post-training, without retraining, from its learned B-spline parameterization into alternative piecewise polynomial representations. An exact knot-aligned transformation reproduces the original model to FP32 precision, while approximate representations provide a controllable complexity-fidelity tradeoff; in this experiment, four and eight pieces preserve task RMSE within 0.5% and 0.05%, respectively.**
 
-## Planned RQ1 Experiments
+## Classification Experiment
 
-The next RQ1 experiment will evaluate the same post-training
-transformation methodology on a classification task. This will allow
-measurement of both classification accuracy and prediction agreement
-between the original and transformed networks.
+To determine whether post-training representation transformation also preserves
+the behavior of a classifier, we repeat the experiment on a nonlinear binary
+classification problem.
+
+### Task and Model
+
+The classification task consists of two concentric regions in two dimensions.
+Inputs are sampled uniformly from
+
+$$x_1,x_2 \in [-1,1],$$
+
+with class labels determined by
+
+$$y = \mathbf{1}\left[x_1^2 + x_2^2 \geq 0.7^2\right].$$
+
+The trained KAN has architecture
+
+```text
+2 -> 16 -> 16 -> 2
+```
+
+with cubic B-spline activations, grid size 5, and spline order 3.
+
+As in the regression experiment, the learned spline functions are transformed
+**after training, with no retraining or fine-tuning**.
+
+### Data Separation
+
+The experiment uses three independent datasets:
+
+|  |  |
+|---|---|
+| Training | 10,000 examples |
+| Calibration | 2,500 examples |
+| Test | 5,000 examples |
+
+The calibration set determines the per-feature activation ranges used to
+construct the approximate piecewise-polynomial representations. The test set
+is used only for final evaluation.
+
+The original trained KAN achieves **99.58% test accuracy**.
+
+### Representation Transformation
+
+Each learned B-spline edge function is transformed into one of five
+representations:
+
+- 1-piece cubic approximation
+- 2-piece cubic approximation
+- 4-piece cubic approximation
+- 8-piece cubic approximation
+- exact knot-aligned piecewise cubic representation
+
+The approximate representations use uniform intervals over activation ranges
+measured from the calibration set. The exact representation uses all 11
+intervals of the extended cubic B-spline knot vector.
+
+The residual SiLU branches are preserved exactly; only the learned spline
+terms are replaced.
+
+### Classification Results
+
+In addition to test accuracy, we measure **prediction agreement** with the
+original trained KAN. Prediction agreement is
+
+$$\frac{1}{N}\sum_{n=1}^{N}\mathbf{1}\left[\arg\max F(x_n)=\arg\max \widetilde{F}(x_n)\right].$$
+
+This distinguishes preservation of task accuracy from preservation of the
+behavior of the original trained model.
+
+| Representation | Pieces | Test Accuracy | Prediction Agreement | Changed Predictions | Logit RMS Difference |
+|---|---:|---:|---:|---:|---:|
+| Original B-spline | -- | 99.580% | -- | -- | -- |
+| 1-piece cubic | 1 | 97.620% | 97.960% | 102 | 3.3358 |
+| 2-piece cubic | 2 | 99.740% | 99.480% | 26 | 1.2960 |
+| 4-piece cubic | 4 | 99.500% | 99.920% | 4 | 4.3145e-01 |
+| 8-piece cubic | 8 | 99.580% | **100.000%** | **0** | 2.9391e-02 |
+| Exact knot-aligned | 11 | 99.580% | **100.000%** | **0** | 1.2575e-06 |
+
+The 8-piece representation produces **exactly the same predicted class as the
+original KAN for all 5,000 test examples**, while requiring no retraining.
+
+The exact knot-aligned representation also preserves all predictions and
+reproduces the original network logits to approximately FP32 numerical
+precision. Its end-to-end logit RMS difference is
+
+$$1.26 \times 10^{-6},$$
+
+with relative RMS difference
+
+$$1.38 \times 10^{-7}.$$
+
+### Accuracy Versus Model Preservation
+
+Task accuracy alone does not fully characterize whether a transformed network
+preserves the original learned model.
+
+For example, the 2-piece representation achieves a slightly higher test
+accuracy than the original model:
+
+```text
+Original:  99.58%
+2-piece:   99.74%
+```
+
+However, it changes 26 of the 5,000 predictions made by the original model.
+Thus, the increase in accuracy does not imply that the original classifier has
+been faithfully preserved.
+
+In contrast, the 4-piece representation changes only 4 predictions, giving
+99.92% agreement with the original model. The 8-piece representation changes
+none.
+
+For binary classification, we also examine the original model's logit margin
+
+$$m(x)=|\ell_1(x)-\ell_0(x)|$$
+
+for examples whose predictions change after transformation.
+
+For the four predictions changed by the 4-piece representation, the original
+margins range from approximately 0.054 to 0.582, with mean 0.274. Thus, these
+changes occur relatively close to the original model's decision boundary.
+
+### Layer and Network Error
+
+As in the regression experiment, we distinguish local representation error
+from accumulated network error.
+
+For the 8-piece representation, the local RMS errors are:
+
+| Layer | Local RMS Error |
+|---|---:|
+| 0 | 7.6643e-05 |
+| 1 | 1.6910e-04 |
+| 2 | 2.9345e-02 |
+
+The accumulated errors through the network are:
+
+| Through Layer | Accumulated RMS Error |
+|---|---:|
+| 0 | 7.6643e-05 |
+| 1 | 2.2608e-04 |
+| 2 | 2.9391e-02 |
+
+Despite a final logit RMS difference of approximately 0.029, the 8-piece
+representation changes **none of the 5,000 predicted classes**. This
+illustrates that numerical equivalence and semantic equivalence need not
+require the same error tolerance: for classification, perturbations in the
+output logits can be acceptable when they do not alter the predicted class.
+
+For the exact knot-aligned transformation, the accumulated RMS errors are:
+
+| Through Layer | Accumulated RMS Error |
+|---|---:|
+| 0 | 2.4177e-08 |
+| 1 | 2.4263e-07 |
+| 2 | 1.2575e-06 |
+
+### Calibration Coverage
+
+Approximate representations are constructed using activation ranges measured
+only on the calibration set. On the independent test set, the fractions of
+activations falling outside these calibration ranges are:
+
+| Layer | Outside Calibration Range | Maximum Excess |
+|---|---:|---:|
+| 0 | 0.0600% | 6.17e-04 |
+| 1 | 0.08375% | 4.37e-02 |
+| 2 | 0.0750% | 3.05e-02 |
+
+Thus, the 100% prediction agreement of the 8-piece representation is obtained
+on an independent test set even though a small fraction of test activations
+fall outside the ranges used to construct the approximation.
+
+### Interpretation
+
+The classification experiment provides a second example of post-training
+representation flexibility. The trained KAN's learned spline functions can be
+replaced by alternative piecewise-polynomial representations without
+retraining.
+
+The results also show a continuum of representation fidelity:
+
+```text
+1 piece  -> substantial behavioral change
+2 pieces -> task accuracy preserved, but 26 predictions change
+4 pieces -> 99.92% prediction agreement
+8 pieces -> 100% prediction agreement
+exact    -> 100% agreement with FP32-level numerical error
+```
+
+### Conclusions
+
+Together with the regression experiment, these results demonstrate that a
+trained KAN need not remain tied to the computational representation used
+during training. The number of polynomial regions provides a tunable
+representation choice that trades numerical fidelity against representation
+complexity while preserving the learned model to a selectable tolerance.
 
