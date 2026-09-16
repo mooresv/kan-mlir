@@ -3,6 +3,10 @@
 This directory contains experiments investigating the first research
 question of the KAN compiler project:
 
+> **RQ1: To what extent can learned edge functions of a trained
+> Kolmogorov-Arnold Network (KAN) be transformed into alternative
+> computational representations without materially changing the
+> learned model?**
 
 The central hypothesis is that the function learned during training
 does not need to remain tied to the computational representation used
@@ -272,7 +276,7 @@ trained multilayer KAN.
 
 The regression experiments has demonstrated the following:
 
-> **A trained multilayer KAN can be transformed post-training, without retraining, from its learned B-spline parameterization into alternative piecewise polynomial representations. An exact knot-aligned transformation reproduces the original model to FP32 precision, while approximate representations provide a controllable complexity-fidelity tradeoff; in this experiment, four and eight pieces preserve task RMSE within 0.5% and 0.05%, respectively.
+> **A trained multilayer KAN can be transformed post-training, without retraining, from its learned B-spline parameterization into alternative piecewise polynomial representations. An exact knot-aligned transformation reproduces the original model to FP32 precision, while approximate representations provide a controllable complexity-fidelity tradeoff; in this experiment, four and eight pieces preserve task RMSE within 0.5% and 0.05%, respectively.**
 
 ## Planned RQ1 Experiments
 
