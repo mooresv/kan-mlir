@@ -649,7 +649,7 @@ $\widetilde{F}_{r,D}$ with both a representation $r$ and a validity domain
 $D$, and solve a constrained selection problem such as
 
 $$
-(r^{*},D^{*}) =
+(r^{\star},D^{\star}) =
 \arg\min_{r,D} C(r,D,x,H)
 \quad
 \text{subject to}
