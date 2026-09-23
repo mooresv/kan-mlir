@@ -16,13 +16,11 @@ input \(i\) to output \(o\). For the KANLib formulation used in this work,
 an edge function can be written as
 
 $$
-\phi_{oi}(t)
-=
-w_{oi}^{s}
-\sum_k c_{o,i,k} B_{i,k}(t)
-+
-w_{oi}^{r}\,\mathrm{SiLU}(t)
+\phi_{o,i}(t) = w^{(s)}_{o,i} \sum_k c_{o,i,k} B_{i,k}(t)
++ w^{(r)}_{o,i} \mathrm{SiLU}(t)
 $$
+
+where \(t\) is a scalar.
 
 where \(t\) is a scalar, \(B_{i,k}\) is the \(k\)-th B-spline basis
 function for input \(i\), \(c_{o,i,k}\) is its learned coefficient,
