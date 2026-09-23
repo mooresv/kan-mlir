@@ -490,9 +490,9 @@ For the current MLIR build, explicit LLVM conversion passes are used:
   -o concrete_llvm.mlir
 ```
 
-The generic `--convert-to-llvm` pass is not currently used because this
-custom driver does not yet register the conversion interface extension
-promised by the `ub` dialect.
+The generic `--convert-to-llvm` pass is not currently used because the
+custom 'kan-opt` driver does not yet register the dialect-conversion extension
+required to lower `ub` operations to the LLVM dialect.
 
 Translate to LLVM IR and compile:
 
