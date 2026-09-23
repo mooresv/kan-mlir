@@ -21,7 +21,7 @@ $$
 w^{(s)}_{o,i}
 \sum_k c_{o,i,k} B_{i,k}(t)
 +
-w^{(r)}_{o,i}\operatorname{SiLU}(t),
+w^{(r)}_{o,i}\mathrm{SiLU}(t),
 $$
 
 where \(t\) is a scalar, \(B_{i,k}\) is the \(k\)-th B-spline basis
