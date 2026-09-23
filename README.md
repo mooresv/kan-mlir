@@ -12,7 +12,7 @@ NVIDIA GPU kernel.
 ## Research Goal
 
 A KAN layer associates a learned univariate function with each edge from
-input \(i\) to output \(o\). For the KANLib formulation used in this work,
+input $i$ to output $o$. For the KANLib formulation used in this work,
 an edge function can be written as
 
 ```math
@@ -23,9 +23,9 @@ w^{(s)}_{o,i} \sum_k c_{o,i,k} B_{i,k}(t)
 w^{(r)}_{o,i} \mathrm{SiLU}(t)
 ```
 
-where \(t\) is a scalar, \(B_{i,k}\) is the \(k\)-th B-spline basis
-function for input \(i\), \(c_{o,i,k}\) is its learned coefficient,
-and \(w^{(s)}_{o,i}\) and \(w^{(r)}_{o,i}\) weight the spline and
+where $t$ is a scalar, $B_{i,k}$ is the $k$-th B-spline basis
+function for input $i$, $c_{o,i,k}$ is its learned coefficient,
+and $w^{(s)}_{o,i}$ and $w^{(r)}_{o,i}$ weight the spline and
 residual branches, respectively.
 
 For an input vector
