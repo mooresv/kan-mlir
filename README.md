@@ -25,7 +25,7 @@ w^{(r)}_{o,i} \mathrm{SiLU}(t)
 
 where $t$ is a scalar, $B_{i,k}$ is the $k$-th B-spline basis
 function for input $i$, $c_{o,i,k}$ is its learned coefficient,
-and $w^{(s)}_{o,i}$ and $w^{(r)}_{o,i}$ weight the spline and
+and $`w^{(s)}_{o,i}`$ and $`w^{(r)}_{o,i}`$ weight the spline and
 residual branches, respectively.
 
 For an input vector
