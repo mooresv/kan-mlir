@@ -15,12 +15,13 @@ A KAN layer associates a learned univariate function with each edge from
 input \(i\) to output \(o\). For the KANLib formulation used in this work,
 an edge function can be written as
 
-$$
-\phi_{o,i}(t) = w^{(s)}_{o,i} \sum_k c_{o,i,k} B_{i,k}(t)
-+ w^{(r)}_{o,i} \mathrm{SiLU}(t)
-$$
-
-where \(t\) is a scalar.
+```math
+\phi_{o,i}(t)
+=
+w^{(s)}_{o,i} \sum_k c_{o,i,k} B_{i,k}(t)
++
+w^{(r)}_{o,i} \mathrm{SiLU}(t)
+```
 
 where \(t\) is a scalar, \(B_{i,k}\) is the \(k\)-th B-spline basis
 function for input \(i\), \(c_{o,i,k}\) is its learned coefficient,
@@ -29,24 +30,25 @@ residual branches, respectively.
 
 For an input vector
 
-$$
-\mathbf{x} = (x_1, x_2, \ldots, x_{D_{\mathrm{in}}}),
-$$
+```math
+\mathbf{x} = (x_1, x_2, \ldots, x_{D_{\mathrm{in}}})
+\in \mathbb{R}^{D_{\mathrm{in}}},
+```
 
 the layer produces an output vector
 
-$$
+```math
 \mathbf{y} = (y_1, y_2, \ldots, y_{D_{\mathrm{out}}})
 \in \mathbb{R}^{D_{\mathrm{out}}},
-$$
+```
 
 whose components are
 
-$$
+```math
 y_o = \sum_{i=1}^{D_{\mathrm{in}}} \phi_{o,i}(x_i),
 \qquad
 o = 1, \ldots, D_{\mathrm{out}}.
-$$
+```
 
 The initial compiler and GPU microbenchmark experiments in this repository
 disable the residual branch (`use_residual_branch=False`) in order to
