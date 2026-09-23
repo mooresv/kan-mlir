@@ -524,7 +524,7 @@ For the current MLIR build, explicit LLVM conversion passes are used:
 ```
 
 The generic `--convert-to-llvm` pass is not currently used because the
-custom 'kan-opt` driver does not yet register the dialect-conversion extension
+custom `kan-opt` driver does not yet register the dialect-conversion extension
 required to lower `ub` operations to the LLVM dialect.
 
 Translate to LLVM IR and compile:
