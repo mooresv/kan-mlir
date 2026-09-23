@@ -11,17 +11,50 @@ NVIDIA GPU kernel.
 
 ## Research Goal
 
-A KAN layer can be written as
+A KAN layer associates a learned univariate function with each edge from
+input \(i\) to output \(o\). For the KANLib formulation used in this work,
+an edge function can be written as
 
 $$
-\phi_{o,i}(x) = \sum_k c_{o,i,k} B_{i,k}(x),
+\phi_{o,i}(t)
+=
+w^{(s)}_{o,i}
+\sum_k c_{o,i,k} B_{i,k}(t)
++
+w^{(r)}_{o,i}\operatorname{SiLU}(t),
 $$
 
-with layer output
+where \(t\) is a scalar, \(B_{i,k}\) is the \(k\)-th B-spline basis
+function for input \(i\), \(c_{o,i,k}\) is its learned coefficient,
+and \(w^{(s)}_{o,i}\) and \(w^{(r)}_{o,i}\) weight the spline and
+residual branches, respectively.
+
+For an input vector
 
 $$
-y_o = \sum_i \phi_{o,i}(x_i).
+\mathbf{x} = (x_1, x_2, \ldots, x_{D_{\mathrm{in}}}),
 $$
+
+the layer produces an output vector
+
+$$
+\mathbf{y} = (y_1, y_2, \ldots, y_{D_{\mathrm{out}}})
+\in \mathbb{R}^{D_{\mathrm{out}}},
+$$
+
+whose components are
+
+$$
+y_o = \sum_{i=1}^{D_{\mathrm{in}}} \phi_{o,i}(x_i),
+\qquad
+o = 1, \ldots, D_{\mathrm{out}}.
+$$
+
+The initial compiler and GPU microbenchmark experiments in this repository
+disable the residual branch (`use_residual_branch=False`) in order to
+isolate the B-spline computation and its alternative computational
+representations. The trained-model experiments retain the residual branch
+and transform only the spline component.
 
 For a degree-d B-spline, each learned edge function is a degree-d
 polynomial within each knot interval. This allows an exact change of
