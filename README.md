@@ -731,6 +731,72 @@ CUDA Driver API
 NVIDIA H100
 ```
 
+The complete benchmark generation and compilation sequence for batch 256 is
+
+``` bash
+cd /src/kan-mlir
+
+python test/make_kanlib_gpu_benchmark.py \
+  --artifact knot_poly_fits.pt \
+  --batch-size 256 \
+  --output /tmp/kanlib_bench_256.mlir
+
+./tools/kan-opt/kan-opt \
+  /tmp/kanlib_bench_256.mlir \
+  --lower-kan-piecewise-poly-to-gpu \
+  -o /tmp/kanlib_bench_256_gpu.mlir
+
+./tools/kan-opt/kan-opt \
+  /tmp/kanlib_bench_256_gpu.mlir \
+  --one-shot-bufferize="bufferize-function-boundaries" \
+  -o /tmp/kanlib_bench_256_bufferized.mlir
+
+./tools/kan-opt/kan-opt \
+  /tmp/kanlib_bench_256_bufferized.mlir \
+  --gpu-lower-to-nvvm-pipeline="cubin-chip=sm_90 opt-level=3" \
+  -o /tmp/kanlib_bench_256_nvvm.mlir
+
+./tools/kan-opt/kan-opt \
+  /tmp/kanlib_bench_256_nodealloc.mlir \
+  --canonicalize \
+  --reconcile-unrealized-casts \
+  -o /tmp/kanlib_bench_256_clean.mlir
+
+mlir-translate \
+  --mlir-to-llvmir \
+  /tmp/kanlib_bench_256_clean.mlir \
+  -o /tmp/kanlib_bench_256.ll
+
+cd /src/kan-mlir/build
+
+llc \
+  -filetype=obj \
+  /tmp/kanlib_bench_256.ll \
+  -o /tmp/kanlib_bench_256.o
+
+g++ -std=c++14 \
+  -c ../test/bench_generated_kan.cpp \
+  -o /tmp/bench_generated_kan.o
+
+g++ \
+  /tmp/bench_generated_kan.o \
+  /tmp/kanlib_bench_256.o \
+  -L/src/kan-mlir/runtime \
+  -lmlir_cuda_runtime \
+  -L/usr/lib64 \
+  -lcuda \
+  -Wl,-rpath,/src/kan-mlir/runtime \
+  -no-pie \
+  -o /tmp/kanlib_bench_256
+
+nsys profile \
+  --trace=cuda \
+  --sample=none \
+  --force-overwrite=true \
+  -o /tmp/kanlib_bench_256_profile \
+  /tmp/kanlib_bench_256
+```
+
 For direct benchmarking, the generated kernel is extracted from the
 compiler produced fatbinary and launched through the CUDA Driver API
 with persistent device-resident input, output, boundary, and coefficient
