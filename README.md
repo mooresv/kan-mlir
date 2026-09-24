@@ -730,6 +730,17 @@ CUDA Driver API
         v
 NVIDIA H100
 ```
+``` text
+                 compiler
+KAN op --------------------------------> generated GPU kernel
+                                             |
+                         +-------------------+-------------------+
+                         |                                       |
+                  correctness wrapper                      benchmark harness
+                  managed allocation                    persistent CUdeviceptr
+                  staging/copy-back                     100 warmups
+                                                       1000 timed launches
+```
 
 The complete benchmark generation and compilation sequence for batch 256 is
 
