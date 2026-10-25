@@ -11,17 +11,50 @@ NVIDIA GPU kernel.
 
 ## Research Goal
 
-A KAN layer can be written as
+A KAN layer associates a learned univariate function with each edge from
+input $i$ to output $o$. For the KANLib formulation used in this work,
+an edge function can be written as
 
-$$
-\phi_{o,i}(x) = \sum_k c_{o,i,k} B_{i,k}(x),
-$$
+```math
+\phi_{o,i}(t)
+=
+w^{(s)}_{o,i} \sum_k c_{o,i,k} B_{i,k}(t)
++
+w^{(r)}_{o,i} \mathrm{SiLU}(t)
+```
 
-with layer output
+where $t$ is a scalar, $B_{i,k}$ is the $k$-th B-spline basis
+function for input $i$, $c_{o,i,k}$ is its learned coefficient,
+and $`w^{(s)}_{o,i}`$ and $`w^{(r)}_{o,i}`$ weight the spline and
+residual branches, respectively.
 
-$$
-y_o = \sum_i \phi_{o,i}(x_i).
-$$
+For an input vector
+
+```math
+\mathbf{x} = (x_1, x_2, \ldots, x_{D_{\mathrm{in}}})
+\in \mathbb{R}^{D_{\mathrm{in}}},
+```
+
+the layer produces an output vector
+
+```math
+\mathbf{y} = (y_1, y_2, \ldots, y_{D_{\mathrm{out}}})
+\in \mathbb{R}^{D_{\mathrm{out}}},
+```
+
+whose components are
+
+```math
+y_o = \sum_{i=1}^{D_{\mathrm{in}}} \phi_{o,i}(x_i),
+\qquad
+o = 1, \ldots, D_{\mathrm{out}}.
+```
+
+The initial compiler and GPU microbenchmark experiments in this repository
+disable the residual branch (`use_residual_branch=False`) in order to
+isolate the B-spline computation and its alternative computational
+representations. The trained-model experiments retain the residual branch
+and transform only the spline component.
 
 For a degree-d B-spline, each learned edge function is a degree-d
 polynomial within each knot interval. This allows an exact change of
@@ -490,9 +523,9 @@ For the current MLIR build, explicit LLVM conversion passes are used:
   -o concrete_llvm.mlir
 ```
 
-The generic `--convert-to-llvm` pass is not currently used because this
-custom driver does not yet register the conversion interface extension
-promised by the `ub` dialect.
+The generic `--convert-to-llvm` pass is not currently used because the
+custom `kan-opt` driver does not yet register the dialect-conversion extension
+required to lower `ub` operations to the LLVM dialect.
 
 Translate to LLVM IR and compile:
 
@@ -696,6 +729,83 @@ CUDA Driver API
         |
         v
 NVIDIA H100
+```
+``` text
+                 compiler
+KAN op --------------------------------> generated GPU kernel
+                                             |
+                         +-------------------+-------------------+
+                         |                                       |
+                  correctness wrapper                      benchmark harness
+                  managed allocation                    persistent CUdeviceptr
+                  staging/copy-back                     100 warmups
+                                                       1000 timed launches
+```
+
+The complete benchmark generation and compilation sequence for batch 256 is
+
+``` bash
+cd /src/kan-mlir
+
+python test/make_kanlib_gpu_benchmark.py \
+  --artifact knot_poly_fits.pt \
+  --batch-size 256 \
+  --output /tmp/kanlib_bench_256.mlir
+
+./tools/kan-opt/kan-opt \
+  /tmp/kanlib_bench_256.mlir \
+  --lower-kan-piecewise-poly-to-gpu \
+  -o /tmp/kanlib_bench_256_gpu.mlir
+
+./tools/kan-opt/kan-opt \
+  /tmp/kanlib_bench_256_gpu.mlir \
+  --one-shot-bufferize="bufferize-function-boundaries" \
+  -o /tmp/kanlib_bench_256_bufferized.mlir
+
+./tools/kan-opt/kan-opt \
+  /tmp/kanlib_bench_256_bufferized.mlir \
+  --gpu-lower-to-nvvm-pipeline="cubin-chip=sm_90 opt-level=3" \
+  -o /tmp/kanlib_bench_256_nvvm.mlir
+
+./tools/kan-opt/kan-opt \
+  /tmp/kanlib_bench_256_nodealloc.mlir \
+  --canonicalize \
+  --reconcile-unrealized-casts \
+  -o /tmp/kanlib_bench_256_clean.mlir
+
+mlir-translate \
+  --mlir-to-llvmir \
+  /tmp/kanlib_bench_256_clean.mlir \
+  -o /tmp/kanlib_bench_256.ll
+
+cd /src/kan-mlir/build
+
+llc \
+  -filetype=obj \
+  /tmp/kanlib_bench_256.ll \
+  -o /tmp/kanlib_bench_256.o
+
+g++ -std=c++14 \
+  -c ../test/bench_generated_kan.cpp \
+  -o /tmp/bench_generated_kan.o
+
+g++ \
+  /tmp/bench_generated_kan.o \
+  /tmp/kanlib_bench_256.o \
+  -L/src/kan-mlir/runtime \
+  -lmlir_cuda_runtime \
+  -L/usr/lib64 \
+  -lcuda \
+  -Wl,-rpath,/src/kan-mlir/runtime \
+  -no-pie \
+  -o /tmp/kanlib_bench_256
+
+nsys profile \
+  --trace=cuda \
+  --sample=none \
+  --force-overwrite=true \
+  -o /tmp/kanlib_bench_256_profile \
+  /tmp/kanlib_bench_256
 ```
 
 For direct benchmarking, the generated kernel is extracted from the
