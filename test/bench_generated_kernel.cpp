@@ -92,13 +92,13 @@ read_floats(const std::string &path,
   return data;
 }
 
-
 int main(int argc, char **argv) {
-  if (argc < 4 || argc > 6) {
+  if (argc < 4 || argc > 10 || (argc > 6 && argc != 10)) {
     std::cerr
         << "Usage: " << argv[0]
         << " <fatbin> <data-dir> <batch-size>"
-        << " [warmup] [iterations]\n";
+        << " [warmup] [iterations]"
+        << " [din dout pieces ncoeff]\n";
     return 1;
   }
 
@@ -113,15 +113,22 @@ int main(int argc, char **argv) {
   const int iterations =
       argc >= 6 ? std::stoi(argv[5]) : 1000;
 
-  if (B <= 0 || warmup < 0 || iterations <= 0) {
-    std::cerr << "Invalid benchmark arguments\n";
+  // Defaults preserve the original 2->8, 5-piece benchmark.
+  const int64_t DIN = argc == 10 ? std::stoll(argv[6]) : 2;
+  const int64_t DOUT = argc == 10 ? std::stoll(argv[7]) : 8;
+  const int64_t PIECES = argc == 10 ? std::stoll(argv[8]) : 5;
+  const int64_t NCOEFF = argc == 10 ? std::stoll(argv[9]) : 4;
+
+  if ((DOUT & (DOUT - 1)) != 0) {
+    std::cerr << "DOUT must be a power of two\n";
     return 1;
   }
 
-  constexpr int64_t DIN = 2;
-  constexpr int64_t DOUT = 8;
-  constexpr int64_t PIECES = 5;
-  constexpr int64_t NCOEFF = 4;
+  if (B <= 0 || warmup < 0 || iterations <= 0 ||
+      DIN <= 0 || DOUT <= 0 || PIECES <= 0 || NCOEFF <= 0) {
+    std::cerr << "Invalid benchmark arguments\n";
+    return 1;
+  }
 
   constexpr int threads = 256;
 
@@ -275,40 +282,51 @@ int main(int argc, char **argv) {
   CUDA_CHECK(cuStreamSynchronize(stream));
 
   // ----------------------------------------------------------
-  // 13-argument bare-pointer ABI.
+  // 17-argument bare-pointer ABI for the boundary-search kernel.
   // ----------------------------------------------------------
 
   int64_t arg_block_size = 256;
   int64_t arg_total_outputs = total_outputs;
-  int64_t arg_dout = DOUT;
 
-  int64_t arg_one = 1;
+  // DOUT must be a power of two.
+  int64_t arg_dout_shift = 0;
+  for (int64_t n = DOUT; n > 1; n >>= 1)
+    ++arg_dout_shift;
+
+  int64_t arg_dout_mask = DOUT - 1;
+
   int64_t arg_zero = 0;
+  int64_t arg_one = 1;
   int64_t arg_two = 2;
   int64_t arg_three = 3;
-  int64_t arg_four = 4;
+  int64_t arg_din = DIN;
+  int64_t arg_pieces = PIECES;
 
   float arg_zero_f = 0.0f;
 
   void *kernel_args[] = {
-      &arg_block_size,
-      &arg_total_outputs,
-      &arg_dout,
+      &arg_block_size,     //  0: 256
+      &arg_total_outputs,  //  1: B * DOUT
+      &arg_dout_shift,     //  2: log2(DOUT)
+      &arg_dout_mask,      //  3: DOUT - 1
 
-      &d_input,
-      &d_bounds,
+      &d_input,            //  4: input pointer
+      &d_bounds,           //  5: boundaries pointer
 
-      &arg_one,
-      &arg_zero,
-      &arg_two,
-      &arg_three,
-      &arg_four,
+      &arg_one,            //  6: 1
+      &arg_pieces,         //  7: PIECES
+      &arg_zero,           //  8: 0
 
-      &d_coeffs,
+      &d_coeffs,           //  9: coefficients pointer
 
-      &arg_zero_f,
+      &arg_three,          // 10: 3
+      &arg_two,            // 11: 2
+      &arg_one,            // 12: 1
+      &arg_zero,           // 13: 0
+      &arg_din,            // 14: DIN
 
-      &d_output
+      &arg_zero_f,         // 15: 0.0f
+      &d_output            // 16: output pointer
   };
 
   auto launch = [&]() {
@@ -402,17 +420,25 @@ int main(int argc, char **argv) {
   size_t max_index = 0;
 
   for (size_t i = 0; i < h_output.size(); ++i) {
-    const double diff =
-        std::abs(
-            static_cast<double>(h_output[i]) -
-            static_cast<double>(h_expected[i]));
+      if (!std::isfinite(h_output[i]) ||
+          !std::isfinite(h_expected[i])) {
+        std::cerr << "Nonfinite value at output index " << i
+                  << ": actual=" << h_output[i]
+                  << ", expected=" << h_expected[i] << "\n";
+        return 1;
+      }
 
-    if (diff > max_abs) {
-      max_abs = diff;
-      max_index = i;
-    }
+      const double diff =
+          std::abs(
+              static_cast<double>(h_output[i]) -
+              static_cast<double>(h_expected[i]));
 
-    sum_sq += diff * diff;
+      if (diff > max_abs) {
+        max_abs = diff;
+        max_index = i;
+      }
+
+      sum_sq += diff * diff;
   }
 
   const double rms =

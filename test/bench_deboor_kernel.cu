@@ -20,14 +20,38 @@
     }                                                                      \
   } while (0)
 
-static constexpr int DIN = 2;
-static constexpr int DOUT = 8;
+#ifndef KAN_DIN
+#define KAN_DIN 2
+#endif
+
+#ifndef KAN_DOUT
+#define KAN_DOUT 8
+#endif
+
+#ifndef KAN_GRID_SIZE
+#define KAN_GRID_SIZE 5
+#endif
+
+static constexpr int DIN = KAN_DIN;
+static constexpr int DOUT = KAN_DOUT;
+static constexpr int GRID_SIZE = KAN_GRID_SIZE;
 
 static constexpr int DEGREE = 3;
-static constexpr int NCOEFF = 8;
+
+// KANLib cubic B-spline coefficient/grid dimensions.
+static constexpr int NCOEFF = GRID_SIZE + DEGREE;
 static constexpr int NKNOTS = NCOEFF + DEGREE + 1;
 
 static constexpr int THREADS = 256;
+
+static constexpr float DOMAIN_MIN = -1.0f;
+static constexpr float H = 2.0f / static_cast<float>(GRID_SIZE);
+static constexpr float INV_H = 1.0f / H;
+static constexpr float INV_2H = 1.0f / (2.0f * H);
+static constexpr float INV_3H = 1.0f / (3.0f * H);
+
+static constexpr int FIRST_SPAN = DEGREE;
+static constexpr int NUM_ACTIVE_SPANS = GRID_SIZE;
 
 /*
  * Current KANLib knot grid:
@@ -37,7 +61,7 @@ static constexpr int THREADS = 256;
  *
  * Uniform knot spacing:
  *
- * h = 0.4
+ * h = 2 / GRID_SIZE
  *
  * Evaluation domain:
  *
@@ -55,17 +79,6 @@ static constexpr int THREADS = 256;
  * [ 0.2, 0.6)
  * [ 0.6, 1.0]
  */
-
-static constexpr float DOMAIN_MIN = -1.0f;
-
-static constexpr float H = 0.4f;
-static constexpr float INV_H = 1.0f / H;
-
-static constexpr float INV_2H = 1.0f / (2.0f * H);
-static constexpr float INV_3H = 1.0f / (3.0f * H);
-
-static constexpr int FIRST_SPAN = DEGREE;
-static constexpr int NUM_ACTIVE_SPANS = 5;
 
 
 template <typename T>

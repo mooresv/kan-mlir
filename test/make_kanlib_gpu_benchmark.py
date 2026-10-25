@@ -28,6 +28,12 @@ def main():
         help="Output MLIR file",
     )
 
+    parser.add_argument(
+        "--fit-key",
+        default=None,
+        help="Key in artifact['fits']; automatically select if only one fit exists",
+    )
+
     args = parser.parse_args()
 
     saved = torch.load(
@@ -36,7 +42,25 @@ def main():
         weights_only=False,
     )
 
-    fit = saved["fits"]["knots_p5_d3"]
+#    fit = saved["fits"]["knots_p5_d3"]
+    fits = saved["fits"]
+
+    if args.fit_key is None:
+        if len(fits) != 1:
+            raise ValueError(
+                f"Artifact contains multiple fits: {list(fits.keys())}. "
+                "Specify one using --fit-key."
+            )
+        fit_key = next(iter(fits))
+    else:
+        fit_key = args.fit_key
+        if fit_key not in fits:
+            raise ValueError(
+                f"Fit key '{fit_key}' not found. "
+                f"Available keys: {list(fits.keys())}"
+            )
+
+    fit = fits[fit_key]
     config = saved["config"]
 
     din = config["in_features"]
@@ -84,6 +108,7 @@ def main():
     print(f"degree:       {coeff_count - 1}")
     print(f"boundaries:   {tuple(boundaries.shape)}")
     print(f"coefficients: {tuple(coefficients.shape)}")
+    print(f"fit key:      {fit_key}")
 
 
 if __name__ == "__main__":

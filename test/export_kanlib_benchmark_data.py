@@ -61,8 +61,9 @@ def main():
         default="knot_poly_fits.pt",
     )
     ap.add_argument(
-        "--fit",
-        default="knots_p5_d3",
+        "--fit-key",
+        default=None,
+        help="Fit key; automatically select when the artifact contains one fit",
     )
     ap.add_argument(
         "--batch-size",
@@ -86,7 +87,24 @@ def main():
         weights_only=False,
     )
 
-    fit = saved["fits"][args.fit]
+    fits = saved["fits"]
+
+    if args.fit_key is None:
+        if len(fits) != 1:
+            raise ValueError(
+                f"Multiple fits available: {list(fits.keys())}. "
+                "Specify --fit-key."
+            )
+        fit_key = next(iter(fits))
+    else:
+        fit_key = args.fit_key
+        if fit_key not in fits:
+            raise ValueError(
+                f"Unknown fit key '{fit_key}'. "
+                f"Available keys: {list(fits.keys())}"
+            )
+
+    fit = fits[fit_key]
 
     boundaries = (
         fit["boundaries"]
@@ -110,9 +128,12 @@ def main():
 
     rng = np.random.default_rng(args.seed)
 
+    low = boundaries[:, 0]
+    high = boundaries[:, -1]
+
     x = rng.uniform(
-        -1.0,
-        1.0,
+        low=low,
+        high=high,
         size=(args.batch_size, Din),
     ).astype(np.float32)
 

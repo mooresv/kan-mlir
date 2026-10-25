@@ -25,25 +25,29 @@ def get_feature_domains(layer: Linear):
 
     return xmin, xmax
 
-
 def get_feature_knot_boundaries(layer: Linear, input_index: int):
     """
-    Return the original, non-extended spline-grid boundaries for one feature.
+    Return all boundaries of the extended KANLib spline knot grid.
 
-    For grid_size = G, this returns G+1 boundaries and therefore G intervals.
+    For spline order p and grid_size G, KANLib stores
+
+        [p left-extension knots]
+        [G+1 original grid points]
+        [p right-extension knots]
+
+    giving G + 2p + 1 knot boundaries and therefore
+    G + 2p intervals.
+
+    For cubic splines (p=3):
+        G=5  -> 12 boundaries -> 11 intervals
+        G=10 -> 17 boundaries -> 16 intervals
+        G=20 -> 27 boundaries -> 26 intervals
+
+    These intervals cover the full support on which the learned
+    B-spline contribution can be nonzero.
     """
     grid = layer.basis.grid.detach().cpu()
-    p = layer.basis.spline_order
-    g = layer.basis.grid_size
-
-    # Extended grid layout:
-    #
-    # [p left-extension knots]
-    # [G+1 original grid points]
-    # [p right-extension knots]
-    #
-    boundaries = grid[input_index, p : p + g + 1]
-
+    boundaries = grid[input_index, :]
     return boundaries.numpy().astype(np.float64)
 
 
@@ -331,7 +335,10 @@ def build_boundaries(
         [Din, pieces+1]
 
     Knots:
-        [Din, grid_size+1]
+        [Din, grid_size + 2*spline_order + 1]
+
+    In knots mode, boundaries span the complete extended knot grid,
+    so the polynomial representation covers the full B-spline support.
     """
     xmin, xmax = get_feature_domains(layer)
 
@@ -510,7 +517,10 @@ def main():
     }
 
     if args.piece_mode == "knots":
-        piece_counts = [args.grid_size]
+        # The requested piece count is ignored in knot mode.
+        # build_boundaries() derives the exact intervals directly
+        # from the layer's extended knot grid.
+        piece_counts = [None]
     else:
         piece_counts = args.pieces
 
@@ -606,8 +616,15 @@ def main():
             )
 
             for i in range(args.in_features):
-                lo = xmin[i].item()
-                hi = xmax[i].item()
+                if args.piece_mode == "knots":
+                    # Validate across the complete extended spline support.
+                    lo = boundaries_np[i, 0]
+                    hi = boundaries_np[i, -1]
+                else:
+                    # Uniform approximations are defined on the nominal domain.
+                    lo = xmin[i].item()
+                    hi = xmax[i].item()
+
                 x_layer[:, i].uniform_(lo, hi)
 
             with torch.no_grad():

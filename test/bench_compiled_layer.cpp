@@ -10,6 +10,23 @@
 #include <string>
 #include <vector>
 
+#ifndef KAN_DIN
+#define KAN_DIN 2
+#endif
+
+#ifndef KAN_DOUT
+#define KAN_DOUT 8
+#endif
+
+#ifndef KAN_GRID_SIZE
+#define KAN_GRID_SIZE 5
+#endif
+
+static constexpr int64_t KAN_DIN_VALUE = KAN_DIN;
+static constexpr int64_t KAN_DOUT_VALUE = KAN_DOUT;
+static constexpr int64_t KAN_PIECES_VALUE = KAN_GRID_SIZE;
+static constexpr int64_t KAN_NCOEFF_VALUE = 4;  // cubic
+
 #define CUDA_CHECK(call)                                           \
   do {                                                             \
     CUresult _err = (call);                                        \
@@ -121,7 +138,7 @@ public:
         bounds_(bounds),
         coeffs_(coeffs) {
 
-    total_outputs_ = batch_ * DOUT;
+    total_outputs_ = batch_ * KAN_DOUT_VALUE;
 
     blocks_ =
         static_cast<unsigned int>(
@@ -141,15 +158,35 @@ public:
     // tid / 8 and tid % 8 to shift/mask operations.
     int64_t arg_block_size = THREADS;
     int64_t arg_total_outputs = total_outputs_;
+    int64_t arg_din = KAN_DIN_VALUE;
 
-    int64_t arg_shift_amount = 3;
-    int64_t arg_output_mask = 7;
+    static_assert(
+        KAN_DOUT_VALUE > 0 &&
+        (KAN_DOUT_VALUE & (KAN_DOUT_VALUE - 1)) == 0,
+        "KAN_DOUT must be a power of two");
+
+    int64_t shift = 0;
+    for (int64_t v = KAN_DOUT_VALUE; v > 1; v >>= 1)
+      ++shift;
+
+    int64_t arg_shift_amount = shift;
+    int64_t arg_output_mask = KAN_DOUT_VALUE - 1;
+
+    // Domain is [-1,1], so knot spacing is 2 / grid_size.
+    float arg_inv_h =
+        static_cast<float>(KAN_GRID_SIZE) / 2.0f;
+
+    int32_t arg_four_i32 =
+        static_cast<int32_t>(KAN_GRID_SIZE - 1);
+
+    //int64_t arg_shift_amount = 3;
+    //int64_t arg_output_mask = 7;
 
     float arg_one_f = 1.0f;
-    float arg_inv_h = 2.5f;
+    //float arg_inv_h = 2.5f;
 
     int32_t arg_zero_i32 = 0;
-    int32_t arg_four_i32 = 4;
+    //int32_t arg_four_i32 = 4;
 
     int64_t arg_three = 3;
     int64_t arg_two = 2;
@@ -182,8 +219,8 @@ public:
         &arg_two,               // param 11
         &arg_one,               // param 12
         &arg_zero,              // param 13
-
-        &arg_zero_f,            // param 14
+        &arg_din,               // param 14
+        &arg_zero_f,            // param 15
 
         &arg_output             // param 15
     };
@@ -205,7 +242,6 @@ public:
 
 
 private:
-  static constexpr int64_t DOUT = 8;
   static constexpr unsigned int THREADS = 256;
 
   CUfunction function_;
@@ -246,10 +282,10 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  constexpr int64_t DIN = 2;
-  constexpr int64_t DOUT = 8;
-  constexpr int64_t PIECES = 5;
-  constexpr int64_t NCOEFF = 4;
+  constexpr int64_t DIN = KAN_DIN_VALUE;
+  constexpr int64_t DOUT = KAN_DOUT_VALUE;
+  constexpr int64_t PIECES = KAN_PIECES_VALUE;
+  constexpr int64_t NCOEFF = KAN_NCOEFF_VALUE;
 
   // ------------------------------------------------------------
   // Read data.

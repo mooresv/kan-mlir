@@ -346,9 +346,18 @@ public:
 
     const int64_t dout =
         coefficientsTy.getShape()[0];
-    if (dout != 8)
+    if (dout <= 0 || (dout & (dout - 1)) != 0)
       return rewriter.notifyMatchFailure(
-          op, "specialized GPU prototype currently requires dout = 8");
+          op,
+          "specialized GPU prototype currently requires "
+          "power-of-two dout");
+
+    int64_t shiftAmountValue = 0;
+    for (int64_t v = dout; v > 1; v >>= 1)
+      ++shiftAmountValue;
+
+    const int64_t outputMaskValue = dout - 1;
+
     const int64_t coeffDin =
         coefficientsTy.getShape()[1];
     const int64_t pieces =
@@ -550,10 +559,15 @@ public:
             loc, tid, cDout);
 */
 
-    // DOUT is statically known to be 8 for this specialized kernel.
+    // DOUT is statically known and power-of-two.
     //
-    //   b = tid / 8  -> tid >> 3
-    //   o = tid % 8  -> tid & 7
+    //   b = tid / DOUT
+    //   o = tid % DOUT
+    //
+    // Therefore:
+    //
+    //   b = tid >> log2(DOUT)
+    //   o = tid & (DOUT - 1)
     //
     // Perform the bit operations in i64 and cast back to index.
 
@@ -566,13 +580,13 @@ public:
     Value shiftAmount =
         rewriter.create<arith::ConstantIntOp>(
             loc,
-            3,
+            shiftAmountValue,
             64);
 
     Value outputMask =
         rewriter.create<arith::ConstantIntOp>(
             loc,
-            7,
+            outputMaskValue,
             64);
 
     Value bI64 =
@@ -643,86 +657,62 @@ public:
             ValueRange{b, i});
 
     //
-    // Piece selection for uniform grid [-1, 1] with 5 pieces:
+    // Select the polynomial piece using the actual boundary tensor.
     //
-    //   piece = floor((x + 1.0) * 2.5)
-    //   piece = clamp(piece, 0, 4)
+    // piece = max { p : x >= bounds[i, p] }, with 0 <= p < pieces.
     //
-    // This matches the arithmetic interval-selection strategy used
-    // by the optimized de Boor baseline.
+    // This supports nonuniform boundaries as well as uniform grids.
+    // The final piece is also used for values above the last boundary.
     //
 
-    Value oneF =
-        cf32(rewriter, loc, 1.0f);
+    Value firstBoundary = cidx(rewriter, loc, 1);
+    Value numPieces = cidx(rewriter, loc, pieces);
 
-    Value invH =
-        cf32(rewriter, loc, 2.5f);
-
-    Value shifted =
-        rewriter.create<arith::AddFOp>(
+    auto pieceLoop =
+        rewriter.create<scf::ForOp>(
             loc,
-            x,
-            oneF);
+            firstBoundary,
+            numPieces,
+            c1,
+            ValueRange{c0});
 
-    Value scaled =
-        rewriter.create<arith::MulFOp>(
-            loc,
-            shifted,
-            invH);
+    {
+        OpBuilder::InsertionGuard guard(rewriter);
 
-    Value pieceI32 =
-        rewriter.create<arith::FPToSIOp>(
-            loc,
-            rewriter.getI32Type(),
-            scaled);
+        rewriter.setInsertionPointToStart(
+            pieceLoop.getBody());
 
-    Value zeroI32 =
-        rewriter.create<arith::ConstantIntOp>(
-            loc,
-            0,
-            32);
+        Value p = pieceLoop.getInductionVar();
 
-    Value maxPieceI32 =
-        rewriter.create<arith::ConstantIntOp>(
-            loc,
-            pieces - 1,
-            32);
+        Value currentPiece =
+            pieceLoop.getRegionIterArgs()[0];
 
-    // Clamp low.
-    Value belowZero =
-        rewriter.create<arith::CmpIOp>(
-            loc,
-            arith::CmpIPredicate::slt,
-            pieceI32,
-            zeroI32);
+        Value boundary =
+            rewriter.create<memref::LoadOp>(
+                loc,
+                boundsMem,
+                ValueRange{i, p});
 
-    pieceI32 =
-        rewriter.create<arith::SelectOp>(
-            loc,
-            belowZero,
-            zeroI32,
-            pieceI32);
+        Value ge =
+            rewriter.create<arith::CmpFOp>(
+                loc,
+                arith::CmpFPredicate::OGE,
+                x,
+                boundary);
 
-    // Clamp high.
-    Value aboveMax =
-        rewriter.create<arith::CmpIOp>(
-            loc,
-            arith::CmpIPredicate::sgt,
-            pieceI32,
-            maxPieceI32);
+        Value selected =
+            rewriter.create<arith::SelectOp>(
+                loc,
+                ge,
+                p,
+                currentPiece);
 
-    pieceI32 =
-        rewriter.create<arith::SelectOp>(
+        rewriter.create<scf::YieldOp>(
             loc,
-            aboveMax,
-            maxPieceI32,
-            pieceI32);
+            selected);
+    }
 
-    Value piece =
-        rewriter.create<arith::IndexCastOp>(
-            loc,
-            rewriter.getIndexType(),
-            pieceI32);
+    Value piece = pieceLoop.getResult(0);
 
     //
     // Horner evaluation.
