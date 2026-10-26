@@ -8,11 +8,14 @@
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/PatternMatch.h"
+#include "mlir/IR/SymbolTable.h"
+#include "llvm/ADT/SmallVector.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 
 #include <cstdint>
 #include <memory>
+#include <string>
 
 using namespace mlir;
 
@@ -62,19 +65,6 @@ static void setSCFYield(
   rewriter.create<scf::YieldOp>(
       loc,
       values);
-}
-
-static void setGPUTerminator(
-    PatternRewriter &rewriter,
-    Location loc,
-    Block *block) {
-
-  if (hasTerminator(block))
-    rewriter.eraseOp(&block->back());
-
-  rewriter.setInsertionPointToEnd(block);
-
-  rewriter.create<gpu::TerminatorOp>(loc);
 }
 
 // Copy rank-2 tensor -> rank-2 host-shared memref.
@@ -346,18 +336,6 @@ public:
 
     const int64_t dout =
         coefficientsTy.getShape()[0];
-    if (dout <= 0 || (dout & (dout - 1)) != 0)
-      return rewriter.notifyMatchFailure(
-          op,
-          "specialized GPU prototype currently requires "
-          "power-of-two dout");
-
-    int64_t shiftAmountValue = 0;
-    for (int64_t v = dout; v > 1; v >>= 1)
-      ++shiftAmountValue;
-
-    const int64_t outputMaskValue = dout - 1;
-
     const int64_t coeffDin =
         coefficientsTy.getShape()[1];
     const int64_t pieces =
@@ -494,30 +472,59 @@ public:
     Value blockX =
         cidx(rewriter, loc, threadsPerBlock);
 
-    auto launch =
-        rewriter.create<gpu::LaunchOp>(
-            loc,
-            gridX, one, one,
-            blockX, one, one);
+    // Each specialization gets a distinct symbol, while its ABI stays fixed.
+    std::string kernelName =
+        "kan_piecewise_b" + std::to_string(batch) +
+        "_i" + std::to_string(din) +
+        "_o" + std::to_string(dout) +
+        "_p" + std::to_string(pieces) +
+        "_c" + std::to_string(numCoefficients);
 
-    Block &kernelBody =
-        launch.getBody().front();
+    ModuleOp module = op->getParentOfType<ModuleOp>();
+    module->setAttr("gpu.container_module", rewriter.getUnitAttr());
+    if (!module)
+      return rewriter.notifyMatchFailure(op, "expected parent module");
 
-    Value blockIdX =
-        launch.getBlockIds().x;
+    gpu::GPUModuleOp gpuModule =
+        module.lookupSymbol<gpu::GPUModuleOp>("kan_piecewise_gpu");
+    if (!gpuModule) {
+      OpBuilder::InsertionGuard guard(rewriter);
+      rewriter.setInsertionPointToEnd(module.getBody());
+      gpuModule = rewriter.create<gpu::GPUModuleOp>(
+          loc, "kan_piecewise_gpu");
+    }
 
-    Value threadIdX =
-        launch.getThreadIds().x;
+    // Do not silently reuse a kernel if the same shape appears twice.
+    // Reuse is safe because the body is determined by these dimensions.
+    gpu::GPUFuncOp kernelFunc =
+        gpuModule.lookupSymbol<gpu::GPUFuncOp>(kernelName);
+    bool createBody = !kernelFunc;
+    if (createBody) {
+      OpBuilder::InsertionGuard guard(rewriter);
+      rewriter.setInsertionPointToEnd(gpuModule.getBody());
+      auto fnTy = rewriter.getFunctionType(
+          {inputMemTy, boundsMemTy, coeffMemTy, outputMemTy}, {});
+      kernelFunc = rewriter.create<gpu::GPUFuncOp>(
+          loc, kernelName, fnTy);
+      kernelFunc->setAttr(
+          gpu::GPUDialect::getKernelFuncAttrName(),
+          rewriter.getUnitAttr());
+      Block *entry = &kernelFunc.getBody().front();
+      rewriter.setInsertionPointToStart(entry);
+      Value kernelBlockX = cidx(rewriter, loc, threadsPerBlock);
 
-    //
-    // Insert kernel body.
-    //
-    setBeforeTerminatorOrEnd(
-        rewriter, &kernelBody);
+      Value inputKernelMem = entry->getArgument(0);
+      Value boundsKernelMem = entry->getArgument(1);
+      Value coeffKernelMem = entry->getArgument(2);
+      Value outputKernelMem = entry->getArgument(3);
+      Value blockIdX = rewriter.create<gpu::BlockIdOp>(
+          loc, gpu::Dimension::x);
+      Value threadIdX = rewriter.create<gpu::ThreadIdOp>(
+          loc, gpu::Dimension::x);
 
     Value blockBase =
         rewriter.create<arith::MulIOp>(
-            loc, blockIdX, blockX);
+            loc, blockIdX, kernelBlockX);
 
     Value tid =
         rewriter.create<arith::AddIOp>(
@@ -546,7 +553,6 @@ public:
     setBeforeTerminatorOrEnd(
         rewriter, thenBody);
 
-/*
     Value cDout =
         cidx(rewriter, loc, dout);
 
@@ -557,61 +563,6 @@ public:
     Value o =
         rewriter.create<arith::RemUIOp>(
             loc, tid, cDout);
-*/
-
-    // DOUT is statically known and power-of-two.
-    //
-    //   b = tid / DOUT
-    //   o = tid % DOUT
-    //
-    // Therefore:
-    //
-    //   b = tid >> log2(DOUT)
-    //   o = tid & (DOUT - 1)
-    //
-    // Perform the bit operations in i64 and cast back to index.
-
-    Value tidI64 =
-        rewriter.create<arith::IndexCastOp>(
-            loc,
-            rewriter.getI64Type(),
-            tid);
-
-    Value shiftAmount =
-        rewriter.create<arith::ConstantIntOp>(
-            loc,
-            shiftAmountValue,
-            64);
-
-    Value outputMask =
-        rewriter.create<arith::ConstantIntOp>(
-            loc,
-            outputMaskValue,
-            64);
-
-    Value bI64 =
-        rewriter.create<arith::ShRUIOp>(
-            loc,
-            tidI64,
-            shiftAmount);
-
-    Value oI64 =
-        rewriter.create<arith::AndIOp>(
-            loc,
-            tidI64,
-            outputMask);
-
-    Value b =
-        rewriter.create<arith::IndexCastOp>(
-            loc,
-            rewriter.getIndexType(),
-            bI64);
-
-    Value o =
-        rewriter.create<arith::IndexCastOp>(
-            loc,
-            rewriter.getIndexType(),
-            oI64);
 
     Value c0 =
         cidx(rewriter, loc, 0);
@@ -653,85 +604,68 @@ public:
     Value x =
         rewriter.create<memref::LoadOp>(
             loc,
-            inputMem,
+            inputKernelMem,
             ValueRange{b, i});
 
     //
-    // Select the polynomial piece using the actual boundary tensor.
+    // Piece selection:
     //
-    // piece = max { p : x >= bounds[i, p] }, with 0 <= p < pieces.
+    // piece = 0
+    // for p=1..pieces-1:
+    //   if x >= bounds[i,p]:
+    //      piece = p
     //
-    // This supports nonuniform boundaries as well as uniform grids.
-    // The final piece is also used for values above the last boundary.
-    //
+    Value piece =
+        cidx(rewriter, loc, 0);
 
-    Value firstBoundary = cidx(rewriter, loc, 1);
-    Value numPieces = cidx(rewriter, loc, pieces);
+    for (int64_t p = 1; p < pieces; ++p) {
+      Value pIdx =
+          cidx(rewriter, loc, p);
 
-    auto pieceLoop =
-        rewriter.create<scf::ForOp>(
-            loc,
-            firstBoundary,
-            numPieces,
-            c1,
-            ValueRange{c0});
+      Value boundary =
+          rewriter.create<memref::LoadOp>(
+              loc,
+              boundsKernelMem,
+              ValueRange{i, pIdx});
 
-    {
-        OpBuilder::InsertionGuard guard(rewriter);
+      Value ge =
+          rewriter.create<arith::CmpFOp>(
+              loc,
+              arith::CmpFPredicate::OGE,
+              x,
+              boundary);
 
-        rewriter.setInsertionPointToStart(
-            pieceLoop.getBody());
-
-        Value p = pieceLoop.getInductionVar();
-
-        Value currentPiece =
-            pieceLoop.getRegionIterArgs()[0];
-
-        Value boundary =
-            rewriter.create<memref::LoadOp>(
-                loc,
-                boundsMem,
-                ValueRange{i, p});
-
-        Value ge =
-            rewriter.create<arith::CmpFOp>(
-                loc,
-                arith::CmpFPredicate::OGE,
-                x,
-                boundary);
-
-        Value selected =
-            rewriter.create<arith::SelectOp>(
-                loc,
-                ge,
-                p,
-                currentPiece);
-
-        rewriter.create<scf::YieldOp>(
-            loc,
-            selected);
+      piece =
+          rewriter.create<arith::SelectOp>(
+              loc,
+              ge,
+              pIdx,
+              piece);
     }
-
-    Value piece = pieceLoop.getResult(0);
 
     //
     // Horner evaluation.
     //
-    Value degreeIdx = cidx(rewriter, loc, degree);
+    // Coefficients are stored:
+    // [output, input, piece, coefficient]
+    //
+    Value degreeIdx =
+        cidx(rewriter, loc, degree);
 
     Value poly =
         rewriter.create<memref::LoadOp>(
             loc,
-            coeffMem,
+            coeffKernelMem,
             ValueRange{o, i, piece, degreeIdx});
 
     for (int64_t k = degree - 1; k >= 0; --k) {
-      Value kIdx = cidx(rewriter, loc, k);
+      Value kIdx =
+          cidx(rewriter, loc, k);
 
       Value a =
           rewriter.create<memref::LoadOp>(
               loc,
-              coeffMem,
+              coeffKernelMem,
               ValueRange{o, i, piece, kIdx});
 
       Value mul =
@@ -761,7 +695,7 @@ public:
     rewriter.create<memref::StoreOp>(
         loc,
         inputLoop.getResult(0),
-        outputMem,
+        outputKernelMem,
         ValueRange{b, o});
 
     setSCFYield(
@@ -769,19 +703,23 @@ public:
         loc,
         thenBody);
 
-    //
-    // End gpu.launch.
-    //
+    // Finish the explicit kernel and return to the host region.
     rewriter.setInsertionPointAfter(ifOp);
+    rewriter.create<gpu::ReturnOp>(loc);
+    } // createBody
 
-    setGPUTerminator(
-        rewriter,
+    // Launch with precisely four memref operands.
+    // The NVVM bare-pointer convention turns these into four device pointers.
+    auto kernelRef = SymbolRefAttr::get(
+        rewriter.getContext(), gpuModule.getName(),
+        {FlatSymbolRefAttr::get(rewriter.getContext(), kernelName)});
+    auto launch = rewriter.create<gpu::LaunchFuncOp>(
         loc,
-        &kernelBody);
-
-    //
-    // Back on host.
-    //
+        kernelFunc,
+        gpu::KernelDim3{gridX, one, one},
+        gpu::KernelDim3{blockX, one, one},
+        Value(),  // No dynamic shared memory
+        ValueRange{inputMem, boundsMem, coeffMem, outputMem});
     rewriter.setInsertionPointAfter(launch);
 
     Value result =
