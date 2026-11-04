@@ -156,6 +156,53 @@ int main(int argc, char **argv) {
       data_dir + "/coeffs.bin",
       DOUT * DIN * PIECES * NCOEFF);
 
+
+  // Optional experimental coefficient layout:
+  // Original:   [dout][din][pieces][numCoefficients]
+  // Transposed: [din][pieces][numCoefficients][dout]
+  //
+  // Transposition occurs before GPU timing.
+
+  const bool transposeCoefficients =
+      std::getenv("KAN_TRANSPOSE_COEFFS") != nullptr &&
+      std::string(std::getenv("KAN_TRANSPOSE_COEFFS")) == "1";
+
+  if (transposeCoefficients) {
+    const size_t expectedSize =
+        static_cast<size_t>(DOUT) * DIN * PIECES * NCOEFF;
+
+    if (h_coeffs.size() != expectedSize) {
+      std::fprintf(stderr,
+                   "Coefficient count mismatch: expected %zu, got %zu\n",
+                   expectedSize, h_coeffs.size());
+      return 1;
+    }
+
+    std::vector<float> transposed(expectedSize);
+
+    for (int o = 0; o < DOUT; ++o) {
+      for (int i = 0; i < DIN; ++i) {
+        for (int p = 0; p < PIECES; ++p) {
+          for (int c = 0; c < NCOEFF; ++c) {
+            const size_t src =
+                (((static_cast<size_t>(o) * DIN + i)
+                    * PIECES + p) * NCOEFF + c);
+
+            const size_t dst =
+                (((static_cast<size_t>(i) * PIECES + p)
+                    * NCOEFF + c) * DOUT + o);
+
+            transposed[dst] = h_coeffs[src];
+          }
+        }
+      }
+    }
+
+    h_coeffs.swap(transposed);
+
+    std::printf("Coefficient layout: transposed [DIN][PIECES][NCOEFF][DOUT]\n");
+  }
+
   auto h_expected = read_floats(
       data_dir + "/expected.bin",
       B * DOUT);
@@ -218,7 +265,10 @@ int main(int argc, char **argv) {
       cuModuleGetFunction(
           &function,
           module,
-          "kan_piecewise_b4096_i8_o32_p16_c4"));
+	  std::getenv("KAN_KERNEL_NAME")
+              ? std::getenv("KAN_KERNEL_NAME")
+              : "kan_piecewise_b4096_i8_o32_p16_c4"
+      ));
 
   // ----------------------------------------------------------
   // Persistent device buffers.

@@ -1,6 +1,7 @@
 #include "KAN/KANOps.h"
 #include "KAN/Passes.h"
 
+#include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
@@ -181,6 +182,63 @@ static void copyTensor4DToMemref(
       v,
       memref,
       ValueRange{i0, i1, i2, i3});
+
+  setSCFYield(rewriter, loc, body3);
+  setSCFYield(rewriter, loc, body2);
+  setSCFYield(rewriter, loc, body1);
+  setSCFYield(rewriter, loc, body0);
+
+  rewriter.setInsertionPointAfter(l0);
+}
+
+
+static void copyTensor4DToMemrefTransposed(
+    PatternRewriter &rewriter,
+    Location loc,
+    Value tensor,
+    Value memref,
+    int64_t dout,
+    int64_t din,
+    int64_t pieces,
+    int64_t numCoefficients) {
+
+  Value c0 = cidx(rewriter, loc, 0);
+  Value c1 = cidx(rewriter, loc, 1);
+
+  Value cDout = cidx(rewriter, loc, dout);
+  Value cDin = cidx(rewriter, loc, din);
+  Value cPieces = cidx(rewriter, loc, pieces);
+  Value cCoeffs = cidx(rewriter, loc, numCoefficients);
+
+  auto l0 = rewriter.create<scf::ForOp>(
+      loc, c0, cDout, c1);
+  Block *body0 = l0.getBody();
+  setBeforeTerminatorOrEnd(rewriter, body0);
+  Value o = l0.getInductionVar();
+
+  auto l1 = rewriter.create<scf::ForOp>(
+      loc, c0, cDin, c1);
+  Block *body1 = l1.getBody();
+  setBeforeTerminatorOrEnd(rewriter, body1);
+  Value i = l1.getInductionVar();
+
+  auto l2 = rewriter.create<scf::ForOp>(
+      loc, c0, cPieces, c1);
+  Block *body2 = l2.getBody();
+  setBeforeTerminatorOrEnd(rewriter, body2);
+  Value p = l2.getInductionVar();
+
+  auto l3 = rewriter.create<scf::ForOp>(
+      loc, c0, cCoeffs, c1);
+  Block *body3 = l3.getBody();
+  setBeforeTerminatorOrEnd(rewriter, body3);
+  Value c = l3.getInductionVar();
+
+  Value v = rewriter.create<tensor::ExtractOp>(
+      loc, tensor, ValueRange{o, i, p, c});
+
+  rewriter.create<memref::StoreOp>(
+      loc, v, memref, ValueRange{i, p, c, o});
 
   setSCFYield(rewriter, loc, body3);
   setSCFYield(rewriter, loc, body2);
@@ -378,9 +436,9 @@ public:
         MemRefType::get({din, pieces + 1}, elementTy);
 
     auto coeffMemTy =
-        MemRefType::get(
-            {dout, din, pieces, numCoefficients},
-            elementTy);
+    MemRefType::get(
+        {din, pieces, numCoefficients, dout},
+        elementTy);
 
     auto outputMemTy =
         MemRefType::get({batch, dout}, elementTy);
@@ -446,7 +504,7 @@ public:
         boundaries, boundsMem,
         din, pieces + 1);
 
-    copyTensor4DToMemref(
+    copyTensor4DToMemrefTransposed(
         rewriter, loc,
         coefficients, coeffMem,
         dout, din, pieces, numCoefficients);
@@ -474,7 +532,7 @@ public:
 
     // Each specialization gets a distinct symbol, while its ABI stays fixed.
     std::string kernelName =
-        "kan_piecewise_b" + std::to_string(batch) +
+        "kan_piecewise_reciprocal_b" + std::to_string(batch) +
         "_i" + std::to_string(din) +
         "_o" + std::to_string(dout) +
         "_p" + std::to_string(pieces) +
@@ -615,7 +673,7 @@ public:
     //   if x >= bounds[i,p]:
     //      piece = p
     //
-    Value piece =
+    /*Value piece =
         cidx(rewriter, loc, 0);
 
     for (int64_t p = 1; p < pieces; ++p) {
@@ -642,6 +700,139 @@ public:
               pIdx,
               piece);
     }
+    */
+
+
+    //
+    // Arithmetic piece selection for uniformly spaced boundaries.
+    //
+    // Initial estimate:
+    //
+    //   p = floor((x - bounds[i,0]) / h)
+    //
+    // where:
+    //
+    //   h = bounds[i,1] - bounds[i,0]
+    //
+    // Clamp to [0, pieces-1], then correct against the
+    // stored boundaries to preserve the linear scan's
+    // behavior near interval boundaries.
+    //
+    // This specialization assumes strictly increasing,
+    // uniformly spaced boundaries.
+    //
+
+    // Experimental specialization for uniform knot spacing h = 0.2.
+    // Replace floating-point division with multiplication by 1/h.
+
+    Value b0 = rewriter.create<memref::LoadOp>(
+        loc, boundsKernelMem, ValueRange{i, c0});
+
+    Value dx = rewriter.create<arith::SubFOp>(loc, x, b0);
+
+    Value invH = cf32(rewriter, loc, 5.0f);
+
+    Value q = rewriter.create<arith::MulFOp>(
+        loc, dx, invH);
+
+    Value qFloor = rewriter.create<math::FloorOp>(loc, q);
+
+    // Clamp in floating point before conversion, avoiding
+    // out-of-range float-to-integer conversion.
+
+    Value zeroF = cf32(rewriter, loc, 0.0f);
+    Value maxPieceF =
+        cf32(rewriter, loc, static_cast<float>(pieces - 1));
+
+    Value qNonnegative =
+        rewriter.create<arith::MaximumFOp>(
+            loc, qFloor, zeroF);
+
+    Value qClamped =
+        rewriter.create<arith::MinimumFOp>(
+            loc, qNonnegative, maxPieceF);
+
+    Value pieceI32 =
+        rewriter.create<arith::FPToSIOp>(
+            loc, rewriter.getI32Type(), qClamped);
+
+    Value piece =
+        rewriter.create<arith::IndexCastOp>(
+            loc, rewriter.getIndexType(), pieceI32);
+
+    Value maxPiece = cidx(rewriter, loc, pieces - 1);
+
+    // Correction 1:
+    // If x is below the selected piece's lower boundary,
+    // move back one interval.
+
+    Value lower =
+        rewriter.create<memref::LoadOp>(
+            loc, boundsKernelMem, ValueRange{i, piece});
+
+    Value below =
+        rewriter.create<arith::CmpFOp>(
+            loc, arith::CmpFPredicate::OLT, x, lower);
+
+    Value canDecrement =
+        rewriter.create<arith::CmpIOp>(
+            loc, arith::CmpIPredicate::sgt, piece, c0);
+
+    Value decrement =
+        rewriter.create<arith::AndIOp>(
+            loc, below, canDecrement);
+
+    Value pieceMinusOne =
+        rewriter.create<arith::SubIOp>(loc, piece, c1);
+
+    piece =
+        rewriter.create<arith::SelectOp>(
+            loc, decrement, pieceMinusOne, piece);
+
+    // Correction 2:
+    // If x reaches the next boundary, advance one interval.
+    // Clamp the lookup index so it remains in bounds.
+
+    Value nextPiece =
+        rewriter.create<arith::AddIOp>(loc, piece, c1);
+
+    Value safeNextPiece =
+        rewriter.create<arith::MinSIOp>(
+            loc, nextPiece, maxPiece);
+
+    Value upper =
+        rewriter.create<memref::LoadOp>(
+            loc, boundsKernelMem,
+            ValueRange{i, safeNextPiece});
+
+    Value above =
+        rewriter.create<arith::CmpFOp>(
+            loc, arith::CmpFPredicate::OGE, x, upper);
+
+    Value canIncrement =
+        rewriter.create<arith::CmpIOp>(
+            loc, arith::CmpIPredicate::slt,
+            piece, maxPiece);
+
+    Value increment =
+        rewriter.create<arith::AndIOp>(
+            loc, above, canIncrement);
+
+    piece =
+        rewriter.create<arith::SelectOp>(
+            loc, increment, nextPiece, piece);
+
+    // Preserve the original ordered-comparison behavior
+    // for NaN inputs: select piece zero.
+
+    Value isNaN =
+        rewriter.create<arith::CmpFOp>(
+            loc, arith::CmpFPredicate::UNO, x, x);
+
+    piece =
+        rewriter.create<arith::SelectOp>(
+            loc, isNaN, c0, piece);
+
 
     //
     // Horner evaluation.
@@ -656,7 +847,7 @@ public:
         rewriter.create<memref::LoadOp>(
             loc,
             coeffKernelMem,
-            ValueRange{o, i, piece, degreeIdx});
+            ValueRange{i, piece, degreeIdx, o});
 
     for (int64_t k = degree - 1; k >= 0; --k) {
       Value kIdx =
@@ -666,7 +857,7 @@ public:
           rewriter.create<memref::LoadOp>(
               loc,
               coeffKernelMem,
-              ValueRange{o, i, piece, kIdx});
+              ValueRange{i, piece, kIdx, o});
 
       Value mul =
           rewriter.create<arith::MulFOp>(
@@ -796,6 +987,7 @@ struct LowerPiecewisePolyGPUPass
 
     registry.insert<
         arith::ArithDialect,
+        math::MathDialect,
         gpu::GPUDialect,
         memref::MemRefDialect,
         scf::SCFDialect,

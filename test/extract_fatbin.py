@@ -77,7 +77,7 @@ def main():
     ap.add_argument("output")
     ap.add_argument(
         "--binary-name",
-        default="kanlib_piecewise_benchmark_kernel",
+        default="kan_piecewise_gpu",
     )
     args = ap.parse_args()
 

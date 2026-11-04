@@ -32,3 +32,5 @@ venv/
 # Backup/download copies
 *.py.[0-9]*
 runtime/libmlir_cuda_runtime.so
+*.swp
+*.swo

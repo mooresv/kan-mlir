@@ -9,6 +9,7 @@ add_mlir_library(MLIRKANDialect
 
   LINK_LIBS PUBLIC
   MLIRArithDialect
+  MLIRMathDialect
   MLIRGPUDialect
   MLIRIR
   MLIRMemRefDialect
