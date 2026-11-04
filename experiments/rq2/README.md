@@ -96,7 +96,7 @@ grep -nE 'div\.|rcp\.|mul\.f32|fma\.|cvt\.rmi' \
 
 ## Next experiments
 
-- **Reproducibility:** capture exact Git commit, CUDA/toolchain versions, GPU clock/power settings, and multiple independent timing repetitions; report dispersion.
+- **Reproducibility:** capture exact Git commit, CUDA/toolchain versions, GPU clock/power settings, and multiple independent timing repetitions. Repeat each benchmark configuration across multiple independent runs and report median execution time and interquartile range (IQR) to quantify measurement variability.
 - **Correctness:** verify uniform spacing in exported artifacts, test knot-boundary neighborhoods and exceptional inputs, and add a safe fallback for nonuniform knots.
 - **Selectable lowerings:** expose linear scan, arithmetic division, and guarded reciprocal as distinct compiler strategies, rather than editing the lowering between runs.
 - **Shape sweep:** vary batch size, `DIN`, `DOUT`, knot/piece count, and polynomial degree; record kernel-only and end-to-end latency.
