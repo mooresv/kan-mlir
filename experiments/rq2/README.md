@@ -101,7 +101,8 @@ grep -nE 'div\.|rcp\.|mul\.f32|fma\.|cvt\.rmi' \
 - **Selectable lowerings:** expose linear scan, arithmetic division, and guarded reciprocal as distinct compiler strategies, rather than editing the lowering between runs.
 - **Shape sweep:** vary batch size, `DIN`, `DOUT`, knot/piece count, and polynomial degree; record kernel-only and end-to-end latency.
 - **Hardware sweep:** repeat equivalent experiments on other GPU architectures and CPU targets where supported.
-- **Profiling:** investigate memory transactions, occupancy, instruction mix, register pressure, and the two remaining dependent boundary-correction loads.
+- **Profiling:** Measure memory transactions, occupancy, instruction mix, register pressure.
+- **Optimization:** Evaluate whether the two memory loads used to correct the arithmetic interval estimate can be replaced by arithmetic boundary calculations or eliminated, and measure the resulting performance and numerical correctness.
 - **RQ3 handoff:** use the resulting performance and accuracy measurements to inform a compiler selection policy with explicit error constraints.
 
 ## Repository organization
